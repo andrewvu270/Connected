@@ -8,8 +8,7 @@ __pycache__/
 *.pyc
 .DS_Store
 
- # Markdown (requested)
- *.md
+.md
 
  # Python
  .pytest_cache/

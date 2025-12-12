@@ -40,7 +40,14 @@ def _select_recent_messages(user_access_token: str, session_id: str, limit: int 
   return list(reversed(msgs))
 
 
-def start_session(user_id: str, user_access_token: str, lesson_id: str | None, mode: str) -> str:
+def start_session(
+  user_id: str,
+  user_access_token: str,
+  lesson_id: str | None,
+  mode: str,
+  initial_state: dict[str, Any] | None = None,
+  initial_coach_message: str | None = None,
+) -> str:
   if mode not in {"coach", "roleplay"}:
     mode = "coach"
 
@@ -53,7 +60,7 @@ def start_session(user_id: str, user_access_token: str, lesson_id: str | None, m
         "lesson_id": lesson_id,
         "mode": mode,
         "status": "active",
-        "state": {},
+        "state": initial_state or {},
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
       }
@@ -78,7 +85,7 @@ def start_session(user_id: str, user_access_token: str, lesson_id: str | None, m
     {
       "session_id": session_id,
       "role": "coach",
-      "content": "Let’s practice. What situation are you preparing for today?",
+      "content": initial_coach_message or "Let’s practice. What situation are you preparing for today?",
       "created_at": _now_iso(),
     }
   ).execute()
@@ -86,10 +93,24 @@ def start_session(user_id: str, user_access_token: str, lesson_id: str | None, m
   return session_id
 
 
-def _generate_coach_reply(*, mode: str, lesson_id: str | None, user_text: str, history: list[dict[str, Any]]) -> tuple[str, dict[str, Any] | None, str | None, str]:
+def _generate_coach_reply(
+  *,
+  mode: str,
+  lesson_id: str | None,
+  user_text: str,
+  history: list[dict[str, Any]],
+  session_state: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any] | None, str | None, str]:
   api_key = os.getenv("OPENAI_API_KEY")
   if not api_key:
     # Fallback: deterministic coach prompt
+    if mode == "roleplay":
+      return (
+        "Okay — let’s roleplay. What would you say next?",
+        {"ok": True, "mode": "fallback", "roleplay": True},
+        None,
+        "roleplay-v0-fallback",
+      )
     return (
       "Got it. Try this next: ask one curious follow-up question (e.g., 'What got you into that?').",
       {"ok": True, "mode": "fallback"},
@@ -100,25 +121,49 @@ def _generate_coach_reply(*, mode: str, lesson_id: str | None, user_text: str, h
   model = os.getenv("COACH_LLM_MODEL", "gpt-4o-mini")
   client = OpenAI(api_key=api_key)
 
-  system = (
-    "You are a friendly social skills coach mascot for young professionals. "
-    "Be concise (1-3 short sentences). "
-    "Always give one actionable tip and one next prompt/question. "
-    "Avoid therapy/medical framing."
-  )
+  drill_prompt = None
+  if isinstance(session_state, dict):
+    drill_prompt = session_state.get("drill_prompt")
 
-  context = {
-    "mode": mode,
-    "lesson_id": lesson_id,
-    "history": history[-8:],
-    "user": user_text,
-    "required_json": {
-      "reply": "string (1-3 short sentences)",
-      "tip": "string (1 sentence)",
-      "next_prompt": "string (a question or prompt)",
-      "confidence": "number 0-1"
-    },
-  }
+  if mode == "roleplay":
+    system = (
+      "You are a roleplay conversation partner. Stay in character and keep replies short (1-2 sentences). "
+      "Always end with a question to keep the conversation moving. "
+      "Do not provide coaching tips unless the user explicitly asks."
+    )
+  else:
+    system = (
+      "You are a friendly social skills coach mascot for young professionals. "
+      "Be concise (1-3 short sentences). "
+      "Always give one actionable tip and one next prompt/question. "
+      "Avoid therapy/medical framing."
+    )
+
+  if mode == "roleplay":
+    context = {
+      "mode": mode,
+      "lesson_id": lesson_id,
+      "drill_prompt": drill_prompt,
+      "history": history[-10:],
+      "user": user_text,
+      "required_json": {
+        "reply": "string (1-2 short sentences, in character)",
+        "confidence": "number 0-1",
+      },
+    }
+  else:
+    context = {
+      "mode": mode,
+      "lesson_id": lesson_id,
+      "history": history[-8:],
+      "user": user_text,
+      "required_json": {
+        "reply": "string (1-3 short sentences)",
+        "tip": "string (1 sentence)",
+        "next_prompt": "string (a question or prompt)",
+        "confidence": "number 0-1",
+      },
+    }
 
   try:
     resp = client.chat.completions.create(
@@ -135,9 +180,20 @@ def _generate_coach_reply(*, mode: str, lesson_id: str | None, user_text: str, h
     if not reply:
       raise ValueError("Missing reply")
 
+    if mode == "roleplay":
+      qa = {"ok": True, "mode": "llm", "roleplay": True, "confidence": parsed.get("confidence")}
+      return reply, qa, model, "roleplay-v1-llm"
+
     qa = {"ok": True, "mode": "llm", "tip": parsed.get("tip"), "next_prompt": parsed.get("next_prompt"), "confidence": parsed.get("confidence")}
     return reply, qa, model, "coach-v1-llm"
   except Exception as e:
+    if mode == "roleplay":
+      return (
+        "Okay. What would you say next?",
+        {"ok": False, "mode": "llm", "roleplay": True, "error": str(e)},
+        model,
+        "roleplay-v1-llm-fallback",
+      )
     return (
       "I hear you. Small move: ask a follow-up that starts with 'What' or 'How'. What would you ask next?",
       {"ok": False, "mode": "llm", "error": str(e)},
@@ -177,6 +233,7 @@ def send_message(user_id: str, user_access_token: str, session_id: str, content:
     lesson_id=session.get("lesson_id"),
     user_text=content,
     history=history,
+    session_state=session.get("state") if isinstance(session, dict) else None,
   )
 
   coach_msg = (

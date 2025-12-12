@@ -16,6 +16,8 @@ export default function PracticePage() {
   }, []);
 
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [drillSessionId, setDrillSessionId] = useState<string | null>(null);
+  const [vapiConfig, setVapiConfig] = useState<Record<string, unknown> | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<string | null>(null);
@@ -29,8 +31,10 @@ export default function PracticePage() {
     });
   }, []);
 
-  async function start() {
+  async function startCoachSession() {
     setStatus(null);
+    setVapiConfig(null);
+    setDrillSessionId(null);
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
     if (!token) {
@@ -55,6 +59,79 @@ export default function PracticePage() {
     const out = await res.json();
     setSessionId(out.session_id);
     setMessages([{ role: "coach", content: "Let’s practice. What situation are you preparing for today?" }]);
+  }
+
+  async function startTextDrill() {
+    setStatus(null);
+    setVapiConfig(null);
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      window.location.href = "/login";
+      return;
+    }
+
+    const res = await fetch(`${aiUrl}/mascot/drill/start`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        provider: "text",
+        setting: "networking",
+        goal: "avoid_silence",
+        person: "stranger",
+        time_budget: "5min",
+        lesson_ids: []
+      })
+    });
+
+    if (!res.ok) {
+      setStatus(`Failed to start text drill: ${res.status}`);
+      return;
+    }
+
+    const out = await res.json();
+    setDrillSessionId(out.drill_session_id ?? null);
+    setSessionId(out.coach_session_id ?? null);
+    const opener = out.prompt?.opener ?? "Okay — let’s roleplay. What would you say next?";
+    setMessages([{ role: "coach", content: String(opener) }]);
+  }
+
+  async function startVoiceDrill() {
+    setStatus(null);
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      window.location.href = "/login";
+      return;
+    }
+
+    const res = await fetch(`${aiUrl}/mascot/drill/start`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        provider: "vapi",
+        setting: "networking",
+        goal: "avoid_silence",
+        person: "stranger",
+        time_budget: "5min",
+        lesson_ids: []
+      })
+    });
+
+    if (!res.ok) {
+      setStatus(`Failed to start voice drill: ${res.status}`);
+      return;
+    }
+
+    const out = await res.json();
+    setDrillSessionId(out.drill_session_id ?? null);
+    setVapiConfig(out.vapi ?? null);
   }
 
   async function send() {
@@ -98,12 +175,18 @@ export default function PracticePage() {
     <main style={{ padding: 24, fontFamily: "system-ui, sans-serif", maxWidth: 680 }}>
       <h1 style={{ margin: 0 }}>Practice</h1>
       <p style={{ marginTop: 8, opacity: 0.8 }}>
-        Text-first coach mode (MVP)
+        Coach + roleplay drills (MVP)
       </p>
 
       <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-        <button onClick={start} style={{ padding: "10px 12px" }}>
-          Start session
+        <button onClick={startCoachSession} style={{ padding: "10px 12px" }}>
+          Start coach
+        </button>
+        <button onClick={startTextDrill} style={{ padding: "10px 12px" }}>
+          Start text drill
+        </button>
+        <button onClick={startVoiceDrill} style={{ padding: "10px 12px" }}>
+          Start voice drill
         </button>
         <a href="/feed" style={{ alignSelf: "center" }}>
           Feed
@@ -111,6 +194,28 @@ export default function PracticePage() {
       </div>
 
       {status ? <p style={{ marginTop: 12 }}>{status}</p> : null}
+
+      {drillSessionId ? (
+        <p style={{ marginTop: 12, opacity: 0.8 }}>Drill session: {drillSessionId}</p>
+      ) : null}
+
+      {vapiConfig ? (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>VAPI payload (hand this to your VAPI client)</div>
+          <pre
+            style={{
+              marginTop: 6,
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid rgba(0,0,0,0.12)",
+              overflowX: "auto",
+              background: "rgba(0,0,0,0.03)"
+            }}
+          >
+            {JSON.stringify(vapiConfig, null, 2)}
+          </pre>
+        </div>
+      ) : null}
 
       <div
         style={{

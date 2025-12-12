@@ -109,8 +109,8 @@ def _select_skills_lessons(*, subdomains: list[str], limit: int, topic_text: str
   supabase = get_supabase_admin_client()
   q = (
     supabase.table("lessons")
-    .select("lesson_id,title,domain,subdomain,tier,difficulty,read_time_minutes,quality_score,actionability_score,tags")
-    .in_("subdomain", subdomains)
+    .select("lesson_id,title,phase,domain,tier,difficulty,read_time_minutes,quality_score,actionability_score,tags")
+    .in_("domain", subdomains)
     .order("actionability_score", desc=True)
     .order("quality_score", desc=True)
     .limit(max(limit * 2, 10))
@@ -287,8 +287,8 @@ def advise(*, setting: str, goal: str, person: str, time_budget: str, topic_text
         "type": "skill",
         "lesson_id": r.get("lesson_id"),
         "title": r.get("title"),
+        "phase": r.get("phase"),
         "domain": r.get("domain"),
-        "subdomain": r.get("subdomain"),
         "difficulty": r.get("difficulty"),
         "read_time_minutes": r.get("read_time_minutes"),
       }

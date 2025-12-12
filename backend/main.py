@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
@@ -8,12 +9,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from langgraph_news import build_news_job_graph
 from langgraph_brief import build_brief_job_graph
 from supabase_client import get_supabase_admin_client
-from api_models import MascotAdviseRequest, NewsSourceIn, SeedNewsSourcesRequest
+from api_models import DrillStartRequest, DrillStartResponse, MascotAdviseRequest, NewsSourceIn, SeedNewsSourcesRequest
 from auth import get_current_user
 from coach_models import SendMessageRequest, SendMessageResponse, StartSessionRequest, StartSessionResponse
 from coach_service import send_message, start_session
 from brief_pipeline import run_daily_brief
 from mascot_service import advise as mascot_advise
+from drill_service import record_vapi_event, start_drill
 
 load_dotenv()
 
@@ -170,3 +172,28 @@ def mascot_advise_endpoint(payload: MascotAdviseRequest, authorization: str | No
     },
   )
   return out
+
+
+@app.post("/mascot/drill/start", response_model=DrillStartResponse)
+def mascot_drill_start(payload: DrillStartRequest, authorization: str | None = Header(default=None)):
+  user = get_current_user(authorization)
+  out = start_drill(
+    user_id=user.id,
+    user_access_token=user.access_token,
+    provider=payload.provider,
+    setting=payload.setting,
+    goal=payload.goal,
+    person=payload.person,
+    time_budget=payload.time_budget,
+    constraints=payload.constraints,
+    lesson_ids=payload.lesson_ids,
+  )
+  return out
+
+
+@app.post("/vapi/webhook")
+def vapi_webhook(payload: dict[str, Any], x_vapi_webhook_secret: str | None = Header(default=None)):
+  expected = os.getenv("VAPI_WEBHOOK_SECRET")
+  if expected and (not x_vapi_webhook_secret or x_vapi_webhook_secret != expected):
+    raise HTTPException(status_code=401, detail="Unauthorized")
+  return record_vapi_event(payload=payload)
