@@ -1,0 +1,11 @@
+{
+  "sources": [
+    {
+      "name": "Hacker News Frontpage",
+      "source_type": "rss",
+      "url": "https://hnrss.org/frontpage",
+      "category": "tech_ai",
+      "enabled": true
+    }
+  ]
+}
