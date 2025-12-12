@@ -3,19 +3,34 @@ import os
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from langgraph_news import build_news_job_graph
 from langgraph_brief import build_brief_job_graph
 from supabase_client import get_supabase_admin_client
-from api_models import DrillStartRequest, DrillStartResponse, MascotAdviseRequest, NewsSourceIn, SeedNewsSourcesRequest
+from api_models import (
+  DrillStartRequest,
+  DrillStartResponse,
+  KnowledgeLessonDetail,
+  KnowledgeLessonSummary,
+  LessonProgressRow,
+  LessonProgressUpsertRequest,
+  MascotAdviseRequest,
+  NewsSourceIn,
+  ProgressSummaryResponse,
+  SeedNewsSourcesRequest,
+  SkillLessonDetail,
+  SkillLessonSummary,
+)
 from auth import get_current_user
 from coach_models import SendMessageRequest, SendMessageResponse, StartSessionRequest, StartSessionResponse
 from coach_service import send_message, start_session
 from brief_pipeline import run_daily_brief
 from mascot_service import advise as mascot_advise
 from drill_service import record_vapi_event, start_drill
+from lesson_service import get_knowledge_lesson, get_skill_lesson, list_knowledge_lessons, list_skill_lessons
+from progress_service import list_lesson_progress, progress_summary, upsert_lesson_progress
 
 load_dotenv()
 
@@ -125,6 +140,105 @@ def coach_start_session(payload: StartSessionRequest, authorization: str | None 
     mode=payload.mode,
   )
   return StartSessionResponse(session_id=session_id)
+
+
+@app.get("/lessons", response_model=list[SkillLessonSummary])
+def list_lessons_endpoint(
+  authorization: str | None = Header(default=None),
+  phase: str | None = Query(default=None),
+  domain: str | None = Query(default=None),
+  difficulty: str | None = Query(default=None),
+  tier: int | None = Query(default=None),
+  q: str | None = Query(default=None),
+  limit: int = Query(default=20),
+  offset: int = Query(default=0),
+):
+  user = get_current_user(authorization)
+  return list_skill_lessons(
+    user_access_token=user.access_token,
+    phase=phase,
+    domain=domain,
+    difficulty=difficulty,
+    tier=tier,
+    q=q,
+    limit=limit,
+    offset=offset,
+  )
+
+
+@app.get("/lessons/{lesson_id}", response_model=SkillLessonDetail)
+def get_lesson_endpoint(lesson_id: str, authorization: str | None = Header(default=None)):
+  user = get_current_user(authorization)
+  row = get_skill_lesson(user_access_token=user.access_token, lesson_id=lesson_id)
+  if not row:
+    raise HTTPException(status_code=404, detail="Lesson not found")
+  return row
+
+
+@app.get("/knowledge_lessons", response_model=list[KnowledgeLessonSummary])
+def list_knowledge_lessons_endpoint(
+  authorization: str | None = Header(default=None),
+  category: str | None = Query(default=None),
+  difficulty: str | None = Query(default=None),
+  q: str | None = Query(default=None),
+  limit: int = Query(default=20),
+  offset: int = Query(default=0),
+):
+  user = get_current_user(authorization)
+  return list_knowledge_lessons(
+    user_access_token=user.access_token,
+    category=category,
+    difficulty=difficulty,
+    q=q,
+    limit=limit,
+    offset=offset,
+  )
+
+
+@app.get("/knowledge_lessons/{lesson_id}", response_model=KnowledgeLessonDetail)
+def get_knowledge_lesson_endpoint(lesson_id: str, authorization: str | None = Header(default=None)):
+  user = get_current_user(authorization)
+  row = get_knowledge_lesson(user_access_token=user.access_token, lesson_id=lesson_id)
+  if not row:
+    raise HTTPException(status_code=404, detail="Knowledge lesson not found")
+  return row
+
+
+@app.post("/progress/lessons", response_model=LessonProgressRow)
+def upsert_progress_endpoint(payload: LessonProgressUpsertRequest, authorization: str | None = Header(default=None)):
+  user = get_current_user(authorization)
+  return upsert_lesson_progress(
+    user_id=user.id,
+    user_access_token=user.access_token,
+    lesson_type=payload.lesson_type,
+    lesson_id=payload.lesson_id,
+    status=payload.status,
+  )
+
+
+@app.get("/progress/lessons", response_model=list[LessonProgressRow])
+def list_progress_endpoint(
+  authorization: str | None = Header(default=None),
+  lesson_type: str | None = Query(default=None),
+  status: str | None = Query(default=None),
+  limit: int = Query(default=50),
+  offset: int = Query(default=0),
+):
+  user = get_current_user(authorization)
+  return list_lesson_progress(
+    user_id=user.id,
+    user_access_token=user.access_token,
+    lesson_type=lesson_type,
+    status=status,
+    limit=limit,
+    offset=offset,
+  )
+
+
+@app.get("/progress/summary", response_model=ProgressSummaryResponse)
+def progress_summary_endpoint(authorization: str | None = Header(default=None)):
+  user = get_current_user(authorization)
+  return progress_summary(user_id=user.id, user_access_token=user.access_token)
 
 
 @app.post("/coach/sessions/{session_id}/message", response_model=SendMessageResponse)

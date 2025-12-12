@@ -49,3 +49,57 @@ class VapiWebhookEvent(BaseModel):
   callId: str | None = None
   transcript: dict | None = None
   metadata: dict | None = None
+
+
+class SkillLessonSummary(BaseModel):
+  lesson_id: str
+  title: str
+  phase: str | None = None
+  domain: str | None = None
+  tier: int | None = None
+  difficulty: str | None = None
+  read_time_minutes: int | None = None
+  quality_score: float | None = None
+  actionability_score: float | None = None
+  tags: list[str] | None = None
+
+
+class SkillLessonDetail(SkillLessonSummary):
+  content: dict | None = None
+
+
+class KnowledgeLessonSummary(BaseModel):
+  lesson_id: str
+  title: str
+  category: str | None = None
+  difficulty: str | None = None
+  read_time_minutes: int | None = None
+  quality_score: float | None = None
+  actionability_score: float | None = None
+  tags: list[str] | None = None
+
+
+class KnowledgeLessonDetail(KnowledgeLessonSummary):
+  content: dict | None = None
+
+
+class LessonProgressUpsertRequest(BaseModel):
+  lesson_type: str  # skill | knowledge
+  lesson_id: str
+  status: str  # started | completed
+
+
+class LessonProgressRow(BaseModel):
+  user_id: str
+  lesson_type: str
+  lesson_id: str
+  status: str
+  started_at: str | None = None
+  completed_at: str | None = None
+  created_at: str | None = None
+  updated_at: str | None = None
+
+
+class ProgressSummaryResponse(BaseModel):
+  lessons: dict
+  drills: dict

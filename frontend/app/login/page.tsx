@@ -2,6 +2,7 @@
 
 import type { ChangeEvent } from "react";
 import { useState } from "react";
+import Link from "next/link";
 
 import { supabase } from "../../src/lib/supabaseClient";
 
@@ -69,7 +70,7 @@ export default function LoginPage() {
       {status ? <p style={{ marginTop: 12 }}>{status}</p> : null}
 
       <p style={{ marginTop: 16 }}>
-        <a href="/">Home</a>
+        <Link href="/">Home</Link>
       </p>
     </main>
   );
