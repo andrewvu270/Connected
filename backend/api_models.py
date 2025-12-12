@@ -103,3 +103,20 @@ class LessonProgressRow(BaseModel):
 class ProgressSummaryResponse(BaseModel):
   lessons: dict
   drills: dict
+
+
+class LearningPathPhaseProgress(BaseModel):
+  phase: str
+  completed: int
+  total: int
+
+
+class LearningPathRecommendations(BaseModel):
+  skills: list[SkillLessonSummary]
+  knowledge: list[KnowledgeLessonSummary]
+
+
+class LearningPathResponse(BaseModel):
+  suggested_phase: str | None = None
+  phase_progress: list[LearningPathPhaseProgress]
+  recommendations: LearningPathRecommendations

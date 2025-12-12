@@ -14,6 +14,7 @@ from api_models import (
   DrillStartResponse,
   KnowledgeLessonDetail,
   KnowledgeLessonSummary,
+  LearningPathResponse,
   LessonProgressRow,
   LessonProgressUpsertRequest,
   MascotAdviseRequest,
@@ -31,6 +32,7 @@ from mascot_service import advise as mascot_advise
 from drill_service import record_vapi_event, start_drill
 from lesson_service import get_knowledge_lesson, get_skill_lesson, list_knowledge_lessons, list_skill_lessons
 from progress_service import list_lesson_progress, progress_summary, upsert_lesson_progress
+from learning_path_service import recommend_learning_path
 
 load_dotenv()
 
@@ -239,6 +241,21 @@ def list_progress_endpoint(
 def progress_summary_endpoint(authorization: str | None = Header(default=None)):
   user = get_current_user(authorization)
   return progress_summary(user_id=user.id, user_access_token=user.access_token)
+
+
+@app.get("/learning_path/recommendations", response_model=LearningPathResponse)
+def learning_path_recommendations_endpoint(
+  authorization: str | None = Header(default=None),
+  skills_limit: int = Query(default=5),
+  knowledge_limit: int = Query(default=2),
+):
+  user = get_current_user(authorization)
+  return recommend_learning_path(
+    user_id=user.id,
+    user_access_token=user.access_token,
+    skills_limit=skills_limit,
+    knowledge_limit=knowledge_limit,
+  )
 
 
 @app.post("/coach/sessions/{session_id}/message", response_model=SendMessageResponse)
