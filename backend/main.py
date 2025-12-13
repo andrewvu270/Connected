@@ -79,7 +79,8 @@ def config():
 
 
 @app.post("/jobs/news/run")
-def run_news_job():
+def run_news_job(x_admin_key: str | None = Header(default=None)):
+  _require_admin(x_admin_key)
   logger.info("news_job_start")
   out = news_job.invoke({})
   logger.info("news_job_done", extra={"result": out.get("result") if isinstance(out, dict) else None})
@@ -87,7 +88,8 @@ def run_news_job():
 
 
 @app.post("/jobs/brief/run")
-def run_brief_job(audience: str = "global"):
+def run_brief_job(audience: str = "global", x_admin_key: str | None = Header(default=None)):
+  _require_admin(x_admin_key)
   logger.info("brief_job_start", extra={"audience": audience})
   out = brief_job.invoke({"audience": audience})
   logger.info("brief_job_done", extra={"result": out.get("result") if isinstance(out, dict) else None})
@@ -95,7 +97,8 @@ def run_brief_job(audience: str = "global"):
 
 
 @app.post("/jobs/brief/run_global")
-def run_brief_global():
+def run_brief_global(x_admin_key: str | None = Header(default=None)):
+  _require_admin(x_admin_key)
   logger.info("brief_global_start")
   res = run_daily_brief(audience="global")
   logger.info(

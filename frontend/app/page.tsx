@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export default function Page() {
   return (
     <main style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
@@ -6,16 +8,22 @@ export default function Page() {
         Scaffold ready. Next: auth, feed, brief, and practice.
       </p>
       <p style={{ marginTop: 12 }}>
-        <a href="/feed">Go to Feed</a>
+        <Link href="/feed">Go to Feed</Link>
       </p>
       <p style={{ marginTop: 12 }}>
-        <a href="/brief">Go to Today’s Brief</a>
+        <Link href="/brief">Go to Today’s Brief</Link>
       </p>
       <p style={{ marginTop: 12 }}>
-        <a href="/login">Login</a>
+        <Link href="/login">Login</Link>
       </p>
       <p style={{ marginTop: 12 }}>
-        <a href="/practice">Practice</a>
+        <Link href="/practice">Practice</Link>
+      </p>
+      <p style={{ marginTop: 12 }}>
+        <Link href="/learning-path">Learning Path</Link>
+      </p>
+      <p style={{ marginTop: 12 }}>
+        <Link href="/mascot">Mascot Advisor</Link>
       </p>
     </main>
   );

@@ -2,6 +2,7 @@
 
 import type { ChangeEvent, KeyboardEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 import { supabase } from "../../src/lib/supabaseClient";
 
@@ -188,9 +189,11 @@ export default function PracticePage() {
         <button onClick={startVoiceDrill} style={{ padding: "10px 12px" }}>
           Start voice drill
         </button>
-        <a href="/feed" style={{ alignSelf: "center" }}>
-          Feed
-        </a>
+        <div style={{ alignSelf: "center", display: "flex", gap: 10 }}>
+          <Link href="/learning-path">Learning Path</Link>
+          <Link href="/mascot">Mascot</Link>
+          <Link href="/feed">Feed</Link>
+        </div>
       </div>
 
       {status ? <p style={{ marginTop: 12 }}>{status}</p> : null}
