@@ -14,6 +14,12 @@ def _now_iso() -> str:
   return datetime.now(timezone.utc).isoformat()
 
 
+def _raise_if_supabase_error(res: Any, context: str) -> None:
+  err = getattr(res, "error", None)
+  if err:
+    raise RuntimeError(f"{context}: {err}")
+
+
 def _select_session(user_access_token: str, session_id: str) -> dict[str, Any] | None:
   supabase = get_supabase_user_client(user_access_token)
   res = (
@@ -65,14 +71,16 @@ def start_session(
         "updated_at": _now_iso(),
       }
     )
-    .select("id")
     .execute()
   )
+  _raise_if_supabase_error(res, "Failed to create coach session")
+  if not isinstance(res.data, list) or not res.data or not isinstance(res.data[0], dict) or not res.data[0].get("id"):
+    raise RuntimeError("Failed to create coach session: no id returned")
   session_id = res.data[0]["id"]
 
   admin = get_supabase_admin_client()
 
-  admin.table("coach_messages").insert(
+  res = admin.table("coach_messages").insert(
     {
       "session_id": session_id,
       "role": "system",
@@ -81,7 +89,9 @@ def start_session(
     }
   ).execute()
 
-  admin.table("coach_messages").insert(
+  _raise_if_supabase_error(res, "Failed to write system message")
+
+  res = admin.table("coach_messages").insert(
     {
       "session_id": session_id,
       "role": "coach",
@@ -89,6 +99,8 @@ def start_session(
       "created_at": _now_iso(),
     }
   ).execute()
+
+  _raise_if_supabase_error(res, "Failed to write initial coach message")
 
   return session_id
 
@@ -213,7 +225,7 @@ def send_message(user_id: str, user_access_token: str, session_id: str, content:
   if session.get("status") != "active":
     raise PermissionError("Session not active")
 
-  user_msg = (
+  res = (
     user_supabase.table("coach_messages")
     .insert(
       {
@@ -223,9 +235,12 @@ def send_message(user_id: str, user_access_token: str, session_id: str, content:
         "created_at": _now_iso(),
       }
     )
-    .select("id,role,content,created_at")
     .execute()
-  ).data[0]
+  )
+  _raise_if_supabase_error(res, "Failed to write user message")
+  if not isinstance(res.data, list) or not res.data or not isinstance(res.data[0], dict):
+    raise RuntimeError("Failed to write user message: no row returned")
+  user_msg = res.data[0]
 
   history = _select_recent_messages(user_access_token, session_id, limit=12)
   reply_text, qa, model_used, prompt_version = _generate_coach_reply(
@@ -236,7 +251,7 @@ def send_message(user_id: str, user_access_token: str, session_id: str, content:
     session_state=session.get("state") if isinstance(session, dict) else None,
   )
 
-  coach_msg = (
+  res = (
     admin.table("coach_messages")
     .insert(
       {
@@ -251,9 +266,12 @@ def send_message(user_id: str, user_access_token: str, session_id: str, content:
         "created_at": _now_iso(),
       }
     )
-    .select("id,role,content,meta,created_at")
     .execute()
-  ).data[0]
+  )
+  _raise_if_supabase_error(res, "Failed to write coach message")
+  if not isinstance(res.data, list) or not res.data or not isinstance(res.data[0], dict):
+    raise RuntimeError("Failed to write coach message: no row returned")
+  coach_msg = res.data[0]
 
   admin.table("coach_sessions").update({"updated_at": _now_iso()}).eq("id", session_id).execute()
 

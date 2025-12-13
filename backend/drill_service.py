@@ -11,6 +11,12 @@ def _now_iso() -> str:
   return datetime.now(timezone.utc).isoformat()
 
 
+def _raise_if_supabase_error(res: Any, context: str) -> None:
+  err = getattr(res, "error", None)
+  if err:
+    raise RuntimeError(f"{context}: {err}")
+
+
 def _build_drill_prompt(*, setting: str, goal: str, person: str, time_budget: str, constraints: str | None, lesson_ids: list[str]) -> dict[str, Any]:
   s = (setting or "").strip().lower()
   g = (goal or "").strip().lower()
@@ -105,9 +111,11 @@ def start_drill(
         "updated_at": _now_iso(),
       }
     )
-    .select("id")
     .execute()
   )
+  _raise_if_supabase_error(created, "Failed to create drill session")
+  if not isinstance(created.data, list) or not created.data or not isinstance(created.data[0], dict) or not created.data[0].get("id"):
+    raise RuntimeError("Failed to create drill session: no id returned")
   drill_session_id = created.data[0]["id"]
 
   out: dict[str, Any] = {
@@ -137,8 +145,11 @@ def start_drill(
     out["coach_session_id"] = coach_session_id
 
   if provider == "vapi":
+    webhook_url = os.getenv("VAPI_WEBHOOK_URL", "")
+    if webhook_url and "/vapi/webhook" not in webhook_url:
+      webhook_url = webhook_url.rstrip("/") + "/vapi/webhook"
     out["vapi"] = {
-      "webhook_url": os.getenv("VAPI_WEBHOOK_URL", ""),
+      "webhook_url": webhook_url,
       "metadata": {"drill_session_id": drill_session_id},
       "assistant": {
         "system_prompt": (
@@ -193,3 +204,17 @@ def record_vapi_event(*, payload: dict[str, Any]) -> dict[str, Any]:
 
   _ = secret
   return {"ok": True, "drill_session_id": drill_session_id}
+
+
+def get_drill_session(*, user_access_token: str, drill_session_id: str) -> dict[str, Any] | None:
+  sb = get_supabase_user_client(user_access_token)
+  res = (
+    sb.table("drill_sessions")
+    .select(
+      "id,user_id,provider,status,setting,goal,person,time_budget,lesson_ids,prompt,events,transcript,vapi_call_id,coach_session_id,created_at,updated_at"
+    )
+    .eq("id", drill_session_id)
+    .limit(1)
+    .execute()
+  )
+  return res.data[0] if res.data else None

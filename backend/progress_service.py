@@ -60,13 +60,31 @@ def upsert_lesson_progress(
     "updated_at": now,
   }
 
-  res = (
+  res = supabase.table("user_lesson_progress").upsert(
+    payload,
+    on_conflict="user_id,lesson_type,lesson_id",
+    returning="representation",
+  ).execute()
+
+  if isinstance(res.data, list) and res.data:
+    row0 = res.data[0]
+    if isinstance(row0, dict):
+      return row0
+
+  # Fallback: fetch the row back (covers cases where representation isn't returned).
+  reread = (
     supabase.table("user_lesson_progress")
-    .upsert(payload, on_conflict="user_id,lesson_type,lesson_id")
     .select("user_id,lesson_type,lesson_id,status,started_at,completed_at,created_at,updated_at")
+    .eq("user_id", user_id)
+    .eq("lesson_type", lt)
+    .eq("lesson_id", lesson_id)
+    .limit(1)
     .execute()
   )
-  return res.data[0]
+  if isinstance(reread.data, list) and reread.data and isinstance(reread.data[0], dict):
+    return reread.data[0]
+
+  raise RuntimeError("Failed to upsert lesson progress")
 
 
 def list_lesson_progress(

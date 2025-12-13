@@ -1,12 +1,17 @@
 import logging
 import os
+import time
+import uuid
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
 import httpx
+from openai import OpenAI
 
 try:
   from langgraph_news import build_news_job_graph
@@ -23,8 +28,10 @@ from api_models import (
   AuthMeResponse,
   AuthRefreshRequest,
   AuthSessionResponse,
+  DrillSessionResponse,
   DrillStartRequest,
   DrillStartResponse,
+  TtsRequest,
   KnowledgeLessonDetail,
   KnowledgeLessonSummary,
   LearningPathResponse,
@@ -42,14 +49,31 @@ from coach_models import SendMessageRequest, SendMessageResponse, StartSessionRe
 from coach_service import send_message, start_session
 from brief_pipeline import run_daily_brief
 from mascot_service import advise as mascot_advise
-from drill_service import record_vapi_event, start_drill
+from drill_service import get_drill_session, record_vapi_event, start_drill
 from lesson_service import get_knowledge_lesson, get_skill_lesson, list_knowledge_lessons, list_skill_lessons
 from progress_service import list_lesson_progress, progress_summary, upsert_lesson_progress
 from learning_path_service import recommend_learning_path
 
 load_dotenv()
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+_request_id_ctx: ContextVar[str | None] = ContextVar("request_id", default=None)
+
+
+class _RequestIdFilter(logging.Filter):
+  def filter(self, record: logging.LogRecord) -> bool:
+    rid = _request_id_ctx.get()
+    setattr(record, "request_id", rid or "-")
+    return True
+
+
+logging.basicConfig(
+  level=os.getenv("LOG_LEVEL", "INFO"),
+  format="%(asctime)s %(levelname)s [%(request_id)s] %(name)s: %(message)s",
+)
+
+for _handler in logging.getLogger().handlers:
+  _handler.addFilter(_RequestIdFilter())
+
 logger = logging.getLogger("connected")
 
 app = FastAPI(title="Connected AI Service")
@@ -72,6 +96,63 @@ app.add_middleware(
 
 news_job = build_news_job_graph() if build_news_job_graph else None
 brief_job = build_brief_job_graph() if build_brief_job_graph else None
+
+
+@app.middleware("http")
+async def _request_id_middleware(request: Request, call_next):
+  rid = (request.headers.get("x-request-id") or "").strip() or str(uuid.uuid4())
+  token = _request_id_ctx.set(rid)
+  start = time.perf_counter()
+
+  try:
+    response = await call_next(request)
+  finally:
+    duration_ms = int((time.perf_counter() - start) * 1000)
+    logger.info(
+      "request_complete",
+      extra={
+        "method": request.method,
+        "path": str(request.url.path),
+        "duration_ms": duration_ms,
+      },
+    )
+    _request_id_ctx.reset(token)
+
+  response.headers["X-Request-ID"] = rid
+  return response
+
+
+@app.exception_handler(PermissionError)
+async def _permission_error_handler(request: Request, exc: PermissionError):
+  return JSONResponse(
+    status_code=403,
+    content={"detail": str(exc) or "Forbidden", "request_id": _request_id_ctx.get()},
+  )
+
+
+@app.exception_handler(ValueError)
+async def _value_error_handler(request: Request, exc: ValueError):
+  return JSONResponse(
+    status_code=400,
+    content={"detail": str(exc) or "Bad Request", "request_id": _request_id_ctx.get()},
+  )
+
+
+@app.exception_handler(RuntimeError)
+async def _runtime_error_handler(request: Request, exc: RuntimeError):
+  return JSONResponse(
+    status_code=500,
+    content={"detail": str(exc) or "Internal Server Error", "request_id": _request_id_ctx.get()},
+  )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+  logger.exception("unhandled_exception", extra={"path": str(request.url.path)})
+  return JSONResponse(
+    status_code=500,
+    content={"detail": "Internal Server Error", "request_id": _request_id_ctx.get()},
+  )
 
 
 def _get_supabase_auth_base_url() -> str:
@@ -118,6 +199,53 @@ def config():
     "has_supabase_url": bool(os.getenv("SUPABASE_URL")),
     "has_service_role": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
   }
+
+
+@app.post("/tts")
+def tts_endpoint(payload: TtsRequest, authorization: str | None = Header(default=None)):
+  _ = get_current_user(authorization)
+
+  if not os.getenv("OPENAI_API_KEY"):
+    raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
+
+  text = (payload.text or "").strip()
+  if not text:
+    raise HTTPException(status_code=400, detail="Missing text")
+  if len(text) > 4096:
+    raise HTTPException(status_code=400, detail="Text too long")
+
+  model = (payload.model or os.getenv("OPENAI_TTS_MODEL") or "tts-1").strip()
+  voice = (payload.voice or os.getenv("OPENAI_TTS_VOICE") or "alloy").strip()
+  fmt = (payload.format or os.getenv("OPENAI_TTS_FORMAT") or "mp3").strip().lower()
+
+  client = OpenAI()
+  audio = client.audio.speech.create(
+    model=model,
+    voice=voice,
+    input=text,
+    response_format=fmt,
+  )
+
+  audio_bytes: bytes
+  if isinstance(audio, (bytes, bytearray)):
+    audio_bytes = bytes(audio)
+  elif hasattr(audio, "content"):
+    audio_bytes = bytes(getattr(audio, "content"))
+  elif hasattr(audio, "read"):
+    audio_bytes = audio.read()
+  else:
+    raise HTTPException(status_code=500, detail="Unexpected TTS response")
+
+  media_type = {
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "aac": "audio/aac",
+    "opus": "audio/opus",
+    "flac": "audio/flac",
+    "pcm": "application/octet-stream",
+  }.get(fmt, "application/octet-stream")
+
+  return Response(content=audio_bytes, media_type=media_type)
 
 
 @app.post("/jobs/news/run")
@@ -501,6 +629,15 @@ def mascot_advise_endpoint(payload: MascotAdviseRequest, authorization: str | No
   return out
 
 
+@app.get("/drills/{drill_session_id}", response_model=DrillSessionResponse)
+def get_drill_session_endpoint(drill_session_id: str, authorization: str | None = Header(default=None)):
+  user = get_current_user(authorization)
+  row = get_drill_session(user_access_token=user.access_token, drill_session_id=drill_session_id)
+  if not row:
+    raise HTTPException(status_code=404, detail="Drill session not found")
+  return row
+
+
 @app.post("/mascot/drill/start", response_model=DrillStartResponse)
 def mascot_drill_start(payload: DrillStartRequest, authorization: str | None = Header(default=None)):
   user = get_current_user(authorization)
@@ -519,8 +656,13 @@ def mascot_drill_start(payload: DrillStartRequest, authorization: str | None = H
 
 
 @app.post("/vapi/webhook")
-def vapi_webhook(payload: dict[str, Any], x_vapi_webhook_secret: str | None = Header(default=None)):
+def vapi_webhook(
+  payload: dict[str, Any],
+  x_vapi_secret: str | None = Header(default=None),
+  x_vapi_webhook_secret: str | None = Header(default=None),
+):
   expected = os.getenv("VAPI_WEBHOOK_SECRET")
-  if expected and (not x_vapi_webhook_secret or x_vapi_webhook_secret != expected):
+  provided = x_vapi_secret or x_vapi_webhook_secret
+  if expected and (not provided or provided != expected):
     raise HTTPException(status_code=401, detail="Unauthorized")
   return record_vapi_event(payload=payload)

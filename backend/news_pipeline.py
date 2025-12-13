@@ -303,17 +303,31 @@ def run_news_pipeline() -> PipelineResult:
         }
 
         # Upsert raw article by (source_id, url)
-        upsert_resp = (
-          supabase.table("news_articles_raw")
-          .upsert(upsert_payload, on_conflict="source_id,url")
-          .select("id,url,title")
-          .execute()
-        )
+        upsert_resp = supabase.table("news_articles_raw").upsert(
+          upsert_payload,
+          on_conflict="source_id,url",
+          returning="representation",
+        ).execute()
 
-        if not upsert_resp.data:
+        article_row = None
+        if isinstance(upsert_resp.data, list) and upsert_resp.data and isinstance(upsert_resp.data[0], dict):
+          article_row = upsert_resp.data[0]
+
+        if not article_row or "id" not in article_row:
+          reread = (
+            supabase.table("news_articles_raw")
+            .select("id,url,title")
+            .eq("source_id", source_id)
+            .eq("url", entry_url)
+            .limit(1)
+            .execute()
+          )
+          if isinstance(reread.data, list) and reread.data and isinstance(reread.data[0], dict):
+            article_row = reread.data[0]
+
+        if not article_row or "id" not in article_row:
           continue
 
-        article_row = upsert_resp.data[0]
         article_id = article_row["id"]
         articles_upserted += 1
 

@@ -177,12 +177,23 @@ export default function LearningPathPage() {
                     padding: 12
                   }}
                 >
-                  <div style={{ fontWeight: 600 }}>{l.title}</div>
+                  <Link href={`/lesson/skill/${encodeURIComponent(l.lesson_id)}`} style={{ fontWeight: 600 }}>
+                    {l.title}
+                  </Link>
                   <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
                     {l.phase ? `Phase: ${l.phase}` : ""}
                     {l.domain ? ` • Domain: ${l.domain}` : ""}
                     {l.read_time_minutes ? ` • ${l.read_time_minutes} min` : ""}
                     {l.difficulty ? ` • ${l.difficulty}` : ""}
+                  </div>
+
+                  <div style={{ marginTop: 10 }}>
+                    <Link
+                      href={`/lesson/skill/${encodeURIComponent(l.lesson_id)}`}
+                      style={{ display: "inline-block", fontSize: 13 }}
+                    >
+                      Open lesson
+                    </Link>
                   </div>
 
                   <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
@@ -220,11 +231,22 @@ export default function LearningPathPage() {
                     padding: 12
                   }}
                 >
-                  <div style={{ fontWeight: 600 }}>{l.title}</div>
+                  <Link href={`/lesson/knowledge/${encodeURIComponent(l.lesson_id)}`} style={{ fontWeight: 600 }}>
+                    {l.title}
+                  </Link>
                   <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
                     {l.category ? `Category: ${l.category}` : ""}
                     {l.read_time_minutes ? ` • ${l.read_time_minutes} min` : ""}
                     {l.difficulty ? ` • ${l.difficulty}` : ""}
+                  </div>
+
+                  <div style={{ marginTop: 10 }}>
+                    <Link
+                      href={`/lesson/knowledge/${encodeURIComponent(l.lesson_id)}`}
+                      style={{ display: "inline-block", fontSize: 13 }}
+                    >
+                      Open lesson
+                    </Link>
                   </div>
 
                   <div style={{ display: "flex", gap: 10, marginTop: 10 }}>

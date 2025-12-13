@@ -66,6 +66,32 @@ class DrillStartResponse(BaseModel):
   coach_session_id: str | None = None
 
 
+class DrillSessionResponse(BaseModel):
+  id: str
+  user_id: str | None = None
+  provider: str | None = None
+  status: str | None = None
+  setting: str | None = None
+  goal: str | None = None
+  person: str | None = None
+  time_budget: str | None = None
+  lesson_ids: list[str] | None = None
+  prompt: dict | None = None
+  events: list | None = None
+  transcript: dict | None = None
+  vapi_call_id: str | None = None
+  coach_session_id: str | None = None
+  created_at: str | None = None
+  updated_at: str | None = None
+
+
+class TtsRequest(BaseModel):
+  text: str
+  voice: str | None = None
+  model: str | None = None
+  format: str | None = None
+
+
 class VapiWebhookEvent(BaseModel):
   status: str | None = None
   call_id: str | None = None

@@ -16,9 +16,6 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "preserve",
-    "types": [
-      "node"
-    ],
     "incremental": true,
     "plugins": [
       {
