@@ -2,176 +2,144 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
-type MascotVariant = "kid" | "creature";
-
-export default function MascotCanvas({ variant }: { variant: MascotVariant }) {
+export default function MascotCanvas() {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
+    let cancelled = false;
+
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xf7f7fb);
 
+    const fog = new THREE.Fog(0xf7f7fb, 2.8, 6.5);
+    scene.fog = fog;
+
     const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
-    camera.position.set(0, 0.6, 2.6);
+    camera.position.set(0.0, 0.85, 2.85);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(renderer.domElement);
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.7);
-    scene.add(ambient);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.enablePan = false;
+    controls.minDistance = 1.8;
+    controls.maxDistance = 4.5;
+    controls.target.set(0, 0.55, 0);
+    controls.update();
 
-    const key = new THREE.DirectionalLight(0xffffff, 0.9);
-    key.position.set(2, 3, 4);
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x9aa6ff, 0.75);
+    scene.add(hemi);
+
+    const key = new THREE.DirectionalLight(0xffffff, 1.15);
+    key.position.set(2.2, 3.4, 2.4);
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.camera.near = 0.1;
+    key.shadow.camera.far = 10;
+    key.shadow.camera.left = -2.2;
+    key.shadow.camera.right = 2.2;
+    key.shadow.camera.top = 2.2;
+    key.shadow.camera.bottom = -2.2;
+    key.shadow.bias = -0.00015;
     scene.add(key);
 
-    const fill = new THREE.DirectionalLight(0xffffff, 0.4);
-    fill.position.set(-2, 1, 2);
-    scene.add(fill);
+    const rim = new THREE.DirectionalLight(0xc7d2fe, 0.55);
+    rim.position.set(-2.6, 2.0, -2.6);
+    scene.add(rim);
 
     const mascotGroup = new THREE.Group();
     scene.add(mascotGroup);
 
     const disposable: Array<{ dispose: () => void }> = [];
 
-    const makeMat = (opts: THREE.MeshStandardMaterialParameters) => {
-      const m = new THREE.MeshStandardMaterial(opts);
-      disposable.push(m);
-      return m;
+    const disposeObject = (obj: THREE.Object3D) => {
+      obj.traverse((child) => {
+        const mesh = child as unknown as THREE.Mesh;
+        const maybeGeo = (mesh as any).geometry as THREE.BufferGeometry | undefined;
+        if (maybeGeo?.dispose) maybeGeo.dispose();
+
+        const maybeMat = (mesh as any).material as THREE.Material | THREE.Material[] | undefined;
+        const mats = Array.isArray(maybeMat) ? maybeMat : maybeMat ? [maybeMat] : [];
+        for (const m of mats) {
+          const matAny = m as any;
+          for (const k of Object.keys(matAny)) {
+            const v = matAny[k];
+            if (v && typeof v === "object" && typeof v.dispose === "function") {
+              v.dispose();
+            }
+          }
+          if (m.dispose) m.dispose();
+        }
+      });
     };
 
-    const makeGeo = <T extends THREE.BufferGeometry>(g: T) => {
-      disposable.push(g);
-      return g;
+    const loadSwagGlb = () => {
+      const loader = new GLTFLoader();
+      loader.load(
+        "/mascots/swag.glb",
+        (gltf) => {
+          if (cancelled) return;
+
+          const obj = gltf.scene;
+
+          const box = new THREE.Box3().setFromObject(obj);
+          const size = new THREE.Vector3();
+          box.getSize(size);
+          const center = new THREE.Vector3();
+          box.getCenter(center);
+
+          obj.position.sub(center);
+          const box2 = new THREE.Box3().setFromObject(obj);
+          obj.position.y -= box2.min.y;
+
+          const targetHeight = 1.85;
+          const scale = size.y > 0 ? targetHeight / size.y : 1;
+          obj.scale.setScalar(scale);
+          obj.position.y *= scale;
+
+          obj.traverse((c) => {
+            const m = c as unknown as THREE.Mesh;
+            if ((m as any).isMesh) {
+              (m as any).castShadow = true;
+              (m as any).receiveShadow = true;
+            }
+          });
+
+          mascotGroup.add(obj);
+          disposable.push({ dispose: () => disposeObject(obj) });
+        },
+        undefined,
+        () => {
+          return;
+        }
+      );
     };
 
-    const addMesh = (g: THREE.BufferGeometry, m: THREE.Material, p: THREE.Vector3, r?: THREE.Euler) => {
-      const mesh = new THREE.Mesh(g, m);
-      mesh.position.copy(p);
-      if (r) mesh.rotation.copy(r);
-      mascotGroup.add(mesh);
-      return mesh;
-    };
+    loadSwagGlb();
 
-    const addEye = (x: number, y: number, z: number, irisColor: number) => {
-      const scleraGeo = makeGeo(new THREE.SphereGeometry(0.14, 32, 32));
-      const scleraMat = makeMat({ color: 0xf5f0ea, roughness: 0.55, metalness: 0.02 });
-      addMesh(scleraGeo, scleraMat, new THREE.Vector3(x, y, z));
+    const groundGeo = new THREE.CircleGeometry(1.15, 96);
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.98, metalness: 0 });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.78;
+    ground.receiveShadow = true;
+    scene.add(ground);
 
-      const irisGeo = makeGeo(new THREE.CircleGeometry(0.085, 48));
-      const irisMat = makeMat({ color: irisColor, roughness: 0.35, metalness: 0.05 });
-      addMesh(irisGeo, irisMat, new THREE.Vector3(x, y, z + 0.13));
-
-      const pupilGeo = makeGeo(new THREE.CircleGeometry(0.04, 48));
-      const pupilMat = makeMat({ color: 0x111827, roughness: 0.35, metalness: 0.05 });
-      addMesh(pupilGeo, pupilMat, new THREE.Vector3(x, y, z + 0.131));
-
-      const shineGeo = makeGeo(new THREE.SphereGeometry(0.018, 16, 16));
-      const shineMat = makeMat({ color: 0xffffff, roughness: 0.15, metalness: 0.05 });
-      addMesh(shineGeo, shineMat, new THREE.Vector3(x - 0.05, y + 0.05, z + 0.145));
-    };
-
-    const buildShared = (skinColor: number, hoodieColor: number, pantsColor: number) => {
-      const skinMat = makeMat({ color: skinColor, roughness: 0.55, metalness: 0.02 });
-      const hairMat = makeMat({ color: 0x4a2a21, roughness: 0.32, metalness: 0.05 });
-      const hoodieMat = makeMat({ color: hoodieColor, roughness: 0.75, metalness: 0.02 });
-      const pantsMat = makeMat({ color: pantsColor, roughness: 0.75, metalness: 0.02 });
-      const shoeMat = makeMat({ color: 0xf1f5f9, roughness: 0.65, metalness: 0.02 });
-      const backpackMat = makeMat({ color: 0x9ca3af, roughness: 0.7, metalness: 0.03 });
-      const strapMat = makeMat({ color: 0x6b7280, roughness: 0.75, metalness: 0.03 });
-      const glassesMat = makeMat({ color: 0x2f2a2a, roughness: 0.3, metalness: 0.1 });
-
-      const headGeo = makeGeo(new THREE.SphereGeometry(0.62, 48, 48));
-      addMesh(headGeo, skinMat, new THREE.Vector3(0, 0.65, 0));
-
-      const earGeo = makeGeo(new THREE.SphereGeometry(0.11, 24, 24));
-      addMesh(earGeo, skinMat, new THREE.Vector3(-0.62, 0.63, 0.02));
-      addMesh(earGeo, skinMat, new THREE.Vector3(0.62, 0.63, 0.02));
-
-      const bodyGeo = makeGeo(new THREE.CapsuleGeometry(0.26, 0.34, 12, 24));
-      addMesh(bodyGeo, hoodieMat, new THREE.Vector3(0, 0.1, 0));
-
-      const hoodGeo = makeGeo(new THREE.TorusGeometry(0.26, 0.08, 16, 64));
-      addMesh(hoodGeo, hoodieMat, new THREE.Vector3(0, 0.32, 0.03), new THREE.Euler(Math.PI / 2.1, 0, 0));
-
-      const legGeo = makeGeo(new THREE.CapsuleGeometry(0.12, 0.26, 8, 16));
-      addMesh(legGeo, pantsMat, new THREE.Vector3(-0.14, -0.35, 0.02), new THREE.Euler(0.05, 0, 0.05));
-      addMesh(legGeo, pantsMat, new THREE.Vector3(0.14, -0.35, 0.02), new THREE.Euler(-0.05, 0, -0.05));
-
-      const shoeGeo = makeGeo(new THREE.CapsuleGeometry(0.14, 0.14, 8, 16));
-      addMesh(shoeGeo, shoeMat, new THREE.Vector3(-0.14, -0.62, 0.08), new THREE.Euler(Math.PI / 2, 0, 0));
-      addMesh(shoeGeo, shoeMat, new THREE.Vector3(0.14, -0.62, 0.08), new THREE.Euler(Math.PI / 2, 0, 0));
-
-      const armGeo = makeGeo(new THREE.CapsuleGeometry(0.11, 0.28, 8, 16));
-      addMesh(armGeo, hoodieMat, new THREE.Vector3(-0.42, 0.18, 0.03), new THREE.Euler(0.2, 0, 0.5));
-      addMesh(armGeo, hoodieMat, new THREE.Vector3(0.42, 0.18, 0.03), new THREE.Euler(0.2, 0, -0.5));
-
-      const handGeo = makeGeo(new THREE.SphereGeometry(0.09, 24, 24));
-      addMesh(handGeo, skinMat, new THREE.Vector3(-0.56, 0.0, 0.14));
-      addMesh(handGeo, skinMat, new THREE.Vector3(0.56, 0.0, 0.14));
-
-      const backpackGeo = makeGeo(new THREE.CapsuleGeometry(0.22, 0.22, 8, 20));
-      addMesh(backpackGeo, backpackMat, new THREE.Vector3(0, 0.18, -0.28), new THREE.Euler(0, 0, 0));
-
-      const strapGeo = makeGeo(new THREE.CapsuleGeometry(0.06, 0.28, 8, 16));
-      addMesh(strapGeo, strapMat, new THREE.Vector3(-0.22, 0.22, -0.07), new THREE.Euler(0.2, 0, 0.45));
-      addMesh(strapGeo, strapMat, new THREE.Vector3(0.22, 0.22, -0.07), new THREE.Euler(0.2, 0, -0.45));
-
-      const ringGeo = makeGeo(new THREE.TorusGeometry(0.19, 0.03, 16, 64));
-      addMesh(ringGeo, glassesMat, new THREE.Vector3(-0.22, 0.68, 0.52));
-      addMesh(ringGeo, glassesMat, new THREE.Vector3(0.22, 0.68, 0.52));
-      const bridgeGeo = makeGeo(new THREE.CapsuleGeometry(0.015, 0.14, 6, 12));
-      addMesh(bridgeGeo, glassesMat, new THREE.Vector3(0, 0.68, 0.52), new THREE.Euler(0, 0, Math.PI / 2));
-
-      addEye(-0.22, 0.68, 0.42, 0x5b3827);
-      addEye(0.22, 0.68, 0.42, 0x5b3827);
-
-      const mouthGeo = makeGeo(new THREE.TorusGeometry(0.09, 0.015, 16, 64, Math.PI));
-      const mouthMat = makeMat({ color: 0x111827, roughness: 0.5, metalness: 0 });
-      addMesh(mouthGeo, mouthMat, new THREE.Vector3(0, 0.5, 0.56), new THREE.Euler(Math.PI, 0, 0));
-
-      return { skinMat, hairMat };
-    };
-
-    if (variant === "kid") {
-      const { hairMat } = buildShared(0xf2c9b0, 0x1f9a90, 0x1f9a90);
-      const hairBaseGeo = makeGeo(new THREE.SphereGeometry(0.62, 48, 48));
-      const hairBase = addMesh(hairBaseGeo, hairMat, new THREE.Vector3(0, 0.74, -0.01));
-      hairBase.scale.set(1.02, 0.72, 1.02);
-
-      const bunGeo = makeGeo(new THREE.SphereGeometry(0.12, 24, 24));
-      const bun1 = addMesh(bunGeo, hairMat, new THREE.Vector3(-0.06, 1.05, 0.02));
-      const bun2 = addMesh(bunGeo, hairMat, new THREE.Vector3(0.06, 1.05, 0.02));
-      bun1.scale.set(1.0, 1.0, 1.0);
-      bun2.scale.set(1.0, 1.0, 1.0);
-
-      const tieGeo = makeGeo(new THREE.TorusGeometry(0.09, 0.03, 12, 32));
-      const tieMat = makeMat({ color: 0x2aa198, roughness: 0.5, metalness: 0.05 });
-      addMesh(tieGeo, tieMat, new THREE.Vector3(0, 1.0, 0.03), new THREE.Euler(Math.PI / 2, 0, 0));
-    }
-
-    if (variant === "creature") {
-      const { hairMat, skinMat } = buildShared(0xe9d9ff, 0x5865f2, 0x111827);
-
-      const crestGeo = makeGeo(new THREE.SphereGeometry(0.2, 24, 24));
-      const crestMat = makeMat({ color: 0x7c3aed, roughness: 0.35, metalness: 0.05 });
-      const crest = addMesh(crestGeo, crestMat, new THREE.Vector3(0, 1.08, 0.02));
-      crest.scale.set(1.4, 0.7, 1.2);
-
-      const hornGeo = makeGeo(new THREE.ConeGeometry(0.12, 0.26, 24));
-      addMesh(hornGeo, hairMat, new THREE.Vector3(-0.32, 1.08, -0.05), new THREE.Euler(-0.3, 0, 0.25));
-      addMesh(hornGeo, hairMat, new THREE.Vector3(0.32, 1.08, -0.05), new THREE.Euler(-0.3, 0, -0.25));
-
-      const earGeo = makeGeo(new THREE.SphereGeometry(0.14, 24, 24));
-      const earL = addMesh(earGeo, skinMat, new THREE.Vector3(-0.7, 0.7, -0.02));
-      const earR = addMesh(earGeo, skinMat, new THREE.Vector3(0.7, 0.7, -0.02));
-      earL.scale.set(0.6, 1.4, 0.6);
-      earR.scale.set(0.6, 1.4, 0.6);
-    }
+    disposable.push(groundGeo);
+    disposable.push(groundMat);
 
     const shadowGeo = new THREE.CircleGeometry(0.7, 64);
     const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.08 });
@@ -197,9 +165,12 @@ export default function MascotCanvas({ variant }: { variant: MascotVariant }) {
     const clock = new THREE.Clock();
 
     const animate = () => {
-      const t = clock.getElapsedTime();
-      mascotGroup.rotation.y = t * 0.5;
-      mascotGroup.position.y = Math.sin(t * 1.6) * 0.05;
+      clock.getDelta();
+      const t = clock.elapsedTime;
+      mascotGroup.rotation.y = Math.sin(t * 0.35) * 0.32;
+      mascotGroup.rotation.x = Math.sin(t * 0.55) * 0.03;
+      mascotGroup.position.y = Math.sin(t * 1.25) * 0.04;
+      controls.update();
       renderer.render(scene, camera);
       raf = window.requestAnimationFrame(animate);
     };
@@ -207,19 +178,23 @@ export default function MascotCanvas({ variant }: { variant: MascotVariant }) {
     raf = window.requestAnimationFrame(animate);
 
     return () => {
+      cancelled = true;
       window.cancelAnimationFrame(raf);
       ro.disconnect();
+      controls.dispose();
       renderer.dispose();
+      fog && (scene.fog = null);
       shadowGeo.dispose();
       shadowMat.dispose();
       for (const d of disposable) {
         d.dispose();
       }
+      mascotGroup.clear();
       if (renderer.domElement.parentNode) {
         renderer.domElement.parentNode.removeChild(renderer.domElement);
       }
     };
-  }, [variant]);
+  }, []);
 
   return (
     <div

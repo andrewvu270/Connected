@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from dotenv import load_dotenv
@@ -133,6 +134,45 @@ def create_news_source(source: NewsSourceIn, x_admin_key: str | None = Header(de
   supabase = get_supabase_admin_client()
   res = supabase.table("news_sources").insert(source.model_dump()).execute()
   return {"id": res.data[0]["id"]}
+
+
+@app.get("/news/feed")
+def get_news_feed(limit: int = Query(default=50, ge=1, le=200)):
+  supabase = get_supabase_admin_client()
+  res = (
+    supabase.table("news_feed_cards")
+    .select("id, category, card, created_at")
+    .eq("published", True)
+    .order("created_at", desc=True)
+    .limit(limit)
+    .execute()
+  )
+  if getattr(res, "error", None):
+    raise HTTPException(status_code=500, detail=str(res.error))
+  return {"data": res.data or []}
+
+
+@app.get("/news/brief")
+def get_news_brief(
+  audience: str = Query(default="global"),
+  brief_date: str | None = Query(default=None),
+):
+  supabase = get_supabase_admin_client()
+  if not brief_date:
+    brief_date = datetime.now(timezone.utc).date().isoformat()
+  res = (
+    supabase.table("news_daily_briefs")
+    .select("brief")
+    .eq("brief_date", brief_date)
+    .eq("audience", audience)
+    .limit(1)
+    .execute()
+  )
+  if getattr(res, "error", None):
+    raise HTTPException(status_code=500, detail=str(res.error))
+  row0 = res.data[0] if isinstance(res.data, list) and res.data else None
+  brief = (row0 or {}).get("brief") if isinstance(row0, dict) else None
+  return {"audience": audience, "brief_date": brief_date, "brief": brief}
 
 
 @app.post("/coach/sessions/start", response_model=StartSessionResponse)

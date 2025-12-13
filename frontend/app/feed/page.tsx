@@ -1,20 +1,17 @@
-import { supabase } from "../../src/lib/supabaseClient";
-
 export default async function FeedPage() {
-  const { data, error } = await supabase
-    .from("news_feed_cards")
-    .select("id, category, card, created_at")
-    .order("created_at", { ascending: false })
-    .limit(50);
-
-  if (error) {
+  const aiUrl = process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8000";
+  const res = await fetch(`${aiUrl}/news/feed?limit=50`, { cache: "no-store" });
+  if (!res.ok) {
     return (
       <main style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
         <h1 style={{ margin: 0 }}>Feed</h1>
-        <p style={{ marginTop: 8 }}>Error: {error.message}</p>
+        <p style={{ marginTop: 8 }}>Error: {res.status}</p>
       </main>
     );
   }
+
+  const json = (await res.json()) as { data?: any[] };
+  const data = json.data ?? [];
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
@@ -23,7 +20,7 @@ export default async function FeedPage() {
         Rolling updates (latest 50)
       </p>
       <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
-        {(data ?? []).map((row: any) => {
+        {data.map((row: any) => {
           const card = row.card as any;
           return (
             <article

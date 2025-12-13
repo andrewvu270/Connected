@@ -22,8 +22,6 @@ export default function MascotPage() {
     return process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8000";
   }, []);
 
-  const [mascotVariant, setMascotVariant] = useState<"kid" | "creature">("kid");
-
   const [setting, setSetting] = useState("networking");
   const [goal, setGoal] = useState("avoid_silence");
   const [person, setPerson] = useState("stranger");
@@ -205,33 +203,9 @@ export default function MascotPage() {
         </section>
 
         <section style={{ display: "grid", gap: 14 }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>Mascot</div>
-            <button
-              onClick={() => setMascotVariant("kid")}
-              style={{
-                padding: "8px 10px",
-                borderRadius: 10,
-                border: "1px solid rgba(0,0,0,0.12)",
-                background: mascotVariant === "kid" ? "rgba(0,0,0,0.06)" : "transparent"
-              }}
-            >
-              Kid
-            </button>
-            <button
-              onClick={() => setMascotVariant("creature")}
-              style={{
-                padding: "8px 10px",
-                borderRadius: 10,
-                border: "1px solid rgba(0,0,0,0.12)",
-                background: mascotVariant === "creature" ? "rgba(0,0,0,0.06)" : "transparent"
-              }}
-            >
-              Creature
-            </button>
-          </div>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>Mascot</div>
 
-          <MascotCanvas variant={mascotVariant} />
+          <MascotCanvas />
 
           <div
             style={{
