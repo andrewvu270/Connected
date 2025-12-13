@@ -5,7 +5,7 @@ import type { ChangeEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import MascotCanvas from "./MascotCanvas";
-import { supabase } from "../../src/lib/supabaseClient";
+import { fetchAuthed, requireAuthOrRedirect } from "../../src/lib/authClient";
 
 type MascotAdviseResponse = {
   input: Record<string, unknown>;
@@ -35,12 +35,7 @@ export default function MascotPage() {
   const [out, setOut] = useState<MascotAdviseResponse | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then((res: any) => {
-      const data = res?.data;
-      if (!data.session) {
-        window.location.href = "/login";
-      }
-    });
+    requireAuthOrRedirect("/login");
   }, []);
 
   async function run() {
@@ -49,18 +44,10 @@ export default function MascotPage() {
     setOut(null);
 
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) {
-        window.location.href = "/login";
-        return;
-      }
-
-      const res = await fetch(`${aiUrl}/mascot/advise`, {
+      const res = await fetchAuthed(`${aiUrl}/mascot/advise`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
         },
         body: JSON.stringify({
           setting,
@@ -72,6 +59,11 @@ export default function MascotPage() {
           max_lessons: Math.max(0, Math.min(5, Number(maxLessons) || 5))
         })
       });
+
+      if (res.status === 401) {
+        window.location.href = "/login";
+        return;
+      }
 
       if (!res.ok) {
         setStatus(`Failed to get advice: ${res.status}`);

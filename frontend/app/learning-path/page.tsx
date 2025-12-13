@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { supabase } from "../../src/lib/supabaseClient";
+import { fetchAuthed, requireAuthOrRedirect } from "../../src/lib/authClient";
 
 type PhaseProgress = {
   phase: string;
@@ -48,31 +48,22 @@ export default function LearningPathPage() {
   const [data, setData] = useState<LearningPathResponse | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then((res: any) => {
-      const s = res?.data?.session;
-      if (!s) {
-        window.location.href = "/login";
-      }
-    });
+    requireAuthOrRedirect("/login");
   }, []);
 
   const refresh = useCallback(async () => {
     setStatus(null);
     setLoading(true);
     try {
-      const { data: auth } = await supabase.auth.getSession();
-      const token = auth.session?.access_token;
-      if (!token) {
+      const res = await fetchAuthed(`${aiUrl}/learning_path/recommendations?skills_limit=5&knowledge_limit=2`, {
+        method: "GET",
+        headers: {}
+      });
+
+      if (res.status === 401) {
         window.location.href = "/login";
         return;
       }
-
-      const res = await fetch(`${aiUrl}/learning_path/recommendations?skills_limit=5&knowledge_limit=2`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
 
       if (!res.ok) {
         setStatus(`Failed to load learning path: ${res.status}`);
@@ -95,18 +86,10 @@ export default function LearningPathPage() {
   async function markLesson(lessonType: "skill" | "knowledge", lessonId: string, statusValue: "started" | "completed") {
     setStatus(null);
     try {
-      const { data: auth } = await supabase.auth.getSession();
-      const token = auth.session?.access_token;
-      if (!token) {
-        window.location.href = "/login";
-        return;
-      }
-
-      const res = await fetch(`${aiUrl}/progress/lessons`, {
+      const res = await fetchAuthed(`${aiUrl}/progress/lessons`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
         },
         body: JSON.stringify({
           lesson_type: lessonType,
@@ -114,6 +97,11 @@ export default function LearningPathPage() {
           status: statusValue
         })
       });
+
+      if (res.status === 401) {
+        window.location.href = "/login";
+        return;
+      }
 
       if (!res.ok) {
         setStatus(`Failed to update progress: ${res.status}`);

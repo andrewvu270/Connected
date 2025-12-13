@@ -6,11 +6,23 @@ from typing import Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+import httpx
 
-from langgraph_news import build_news_job_graph
-from langgraph_brief import build_brief_job_graph
+try:
+  from langgraph_news import build_news_job_graph
+except ModuleNotFoundError:
+  build_news_job_graph = None
+
+try:
+  from langgraph_brief import build_brief_job_graph
+except ModuleNotFoundError:
+  build_brief_job_graph = None
 from supabase_client import get_supabase_admin_client
 from api_models import (
+  AuthEmailPasswordRequest,
+  AuthMeResponse,
+  AuthRefreshRequest,
+  AuthSessionResponse,
   DrillStartRequest,
   DrillStartResponse,
   KnowledgeLessonDetail,
@@ -42,18 +54,47 @@ logger = logging.getLogger("connected")
 
 app = FastAPI(title="Connected AI Service")
 
+web_origin_env = os.getenv("WEB_ORIGIN", "http://localhost:3000")
+web_origins = [o.strip() for o in web_origin_env.split(",") if o.strip()]
+
+allow_credentials = os.getenv("ALLOW_CREDENTIALS", "false").lower() == "true"
+if web_origin_env.strip() == "*":
+  web_origins = ["*"]
+  allow_credentials = False
+
 app.add_middleware(
   CORSMiddleware,
-  allow_origins=[
-    os.getenv("WEB_ORIGIN", "http://localhost:3000"),
-  ],
-  allow_credentials=True,
+  allow_origins=web_origins,
+  allow_credentials=allow_credentials,
   allow_methods=["*"] ,
   allow_headers=["*"] ,
 )
 
-news_job = build_news_job_graph()
-brief_job = build_brief_job_graph()
+news_job = build_news_job_graph() if build_news_job_graph else None
+brief_job = build_brief_job_graph() if build_brief_job_graph else None
+
+
+def _get_supabase_auth_base_url() -> str:
+  url = os.getenv("SUPABASE_URL")
+  if not url:
+    raise HTTPException(status_code=500, detail="SUPABASE_URL not configured")
+  return url.rstrip("/")
+
+
+def _get_supabase_anon_key() -> str:
+  key = os.getenv("SUPABASE_ANON_KEY")
+  if not key:
+    raise HTTPException(status_code=500, detail="SUPABASE_ANON_KEY not configured")
+  return key
+
+
+def _auth_error(resp: httpx.Response) -> HTTPException:
+  detail: Any = None
+  try:
+    detail = resp.json()
+  except Exception:
+    detail = resp.text
+  return HTTPException(status_code=resp.status_code, detail=detail)
 
 
 def _require_admin(x_admin_key: str | None) -> None:
@@ -82,6 +123,8 @@ def config():
 @app.post("/jobs/news/run")
 def run_news_job(x_admin_key: str | None = Header(default=None)):
   _require_admin(x_admin_key)
+  if not news_job:
+    raise HTTPException(status_code=503, detail="News job pipeline not available (langgraph dependency missing)")
   logger.info("news_job_start")
   out = news_job.invoke({})
   logger.info("news_job_done", extra={"result": out.get("result") if isinstance(out, dict) else None})
@@ -91,6 +134,8 @@ def run_news_job(x_admin_key: str | None = Header(default=None)):
 @app.post("/jobs/brief/run")
 def run_brief_job(audience: str = "global", x_admin_key: str | None = Header(default=None)):
   _require_admin(x_admin_key)
+  if not brief_job:
+    raise HTTPException(status_code=503, detail="Brief job pipeline not available (langgraph dependency missing)")
   logger.info("brief_job_start", extra={"audience": audience})
   out = brief_job.invoke({"audience": audience})
   logger.info("brief_job_done", extra={"result": out.get("result") if isinstance(out, dict) else None})
@@ -136,6 +181,108 @@ def create_news_source(source: NewsSourceIn, x_admin_key: str | None = Header(de
   return {"id": res.data[0]["id"]}
 
 
+@app.post("/auth/signup", response_model=AuthSessionResponse)
+def auth_signup(payload: AuthEmailPasswordRequest):
+  base = _get_supabase_auth_base_url()
+  anon = _get_supabase_anon_key()
+  with httpx.Client(timeout=15) as client:
+    resp = client.post(
+      f"{base}/auth/v1/signup",
+      headers={
+        "apikey": anon,
+        "Content-Type": "application/json",
+      },
+      json={"email": payload.email, "password": payload.password},
+    )
+  if resp.status_code not in {200, 201}:
+    raise _auth_error(resp)
+  data = resp.json()
+  return AuthSessionResponse(
+    access_token=data.get("access_token"),
+    refresh_token=data.get("refresh_token"),
+    token_type=data.get("token_type"),
+    expires_in=data.get("expires_in"),
+    expires_at=data.get("expires_at"),
+    user=data.get("user"),
+  )
+
+
+@app.post("/auth/login", response_model=AuthSessionResponse)
+def auth_login(payload: AuthEmailPasswordRequest):
+  base = _get_supabase_auth_base_url()
+  anon = _get_supabase_anon_key()
+  with httpx.Client(timeout=15) as client:
+    resp = client.post(
+      f"{base}/auth/v1/token?grant_type=password",
+      headers={
+        "apikey": anon,
+        "Content-Type": "application/json",
+      },
+      json={"email": payload.email, "password": payload.password},
+    )
+  if resp.status_code != 200:
+    raise _auth_error(resp)
+  data = resp.json()
+  return AuthSessionResponse(
+    access_token=data.get("access_token"),
+    refresh_token=data.get("refresh_token"),
+    token_type=data.get("token_type"),
+    expires_in=data.get("expires_in"),
+    expires_at=data.get("expires_at"),
+    user=data.get("user"),
+  )
+
+
+@app.post("/auth/refresh", response_model=AuthSessionResponse)
+def auth_refresh(payload: AuthRefreshRequest):
+  base = _get_supabase_auth_base_url()
+  anon = _get_supabase_anon_key()
+  with httpx.Client(timeout=15) as client:
+    resp = client.post(
+      f"{base}/auth/v1/token?grant_type=refresh_token",
+      headers={
+        "apikey": anon,
+        "Content-Type": "application/json",
+      },
+      json={"refresh_token": payload.refresh_token},
+    )
+  if resp.status_code != 200:
+    raise _auth_error(resp)
+  data = resp.json()
+  return AuthSessionResponse(
+    access_token=data.get("access_token"),
+    refresh_token=data.get("refresh_token"),
+    token_type=data.get("token_type"),
+    expires_in=data.get("expires_in"),
+    expires_at=data.get("expires_at"),
+    user=data.get("user"),
+  )
+
+
+@app.post("/auth/logout")
+def auth_logout(authorization: str | None = Header(default=None)):
+  user = get_current_user(authorization)
+  base = _get_supabase_auth_base_url()
+  anon = _get_supabase_anon_key()
+  with httpx.Client(timeout=15) as client:
+    resp = client.post(
+      f"{base}/auth/v1/logout",
+      headers={
+        "apikey": anon,
+        "Authorization": f"Bearer {user.access_token}",
+      },
+    )
+  if resp.status_code not in {200, 204}:
+    raise _auth_error(resp)
+  return {"ok": True}
+
+
+@app.get("/auth/me", response_model=AuthMeResponse)
+def auth_me(authorization: str | None = Header(default=None)):
+  user = get_current_user(authorization)
+  return AuthMeResponse(id=user.id, email=user.email)
+
+
 @app.get("/news/feed")
 def get_news_feed(limit: int = Query(default=50, ge=1, le=200)):
   supabase = get_supabase_admin_client()
@@ -178,13 +325,16 @@ def get_news_brief(
 @app.post("/coach/sessions/start", response_model=StartSessionResponse)
 def coach_start_session(payload: StartSessionRequest, authorization: str | None = Header(default=None)):
   user = get_current_user(authorization)
-  session_id = start_session(
-    user_id=user.id,
-    user_access_token=user.access_token,
-    lesson_id=payload.lesson_id,
-    mode=payload.mode,
-  )
-  return StartSessionResponse(session_id=session_id)
+  try:
+    session_id = start_session(
+      user_id=user.id,
+      user_access_token=user.access_token,
+      lesson_id=payload.lesson_id,
+      mode=payload.mode,
+    )
+    return StartSessionResponse(session_id=session_id)
+  except RuntimeError as e:
+    raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/lessons", response_model=list[SkillLessonSummary])
@@ -293,12 +443,15 @@ def learning_path_recommendations_endpoint(
   knowledge_limit: int = Query(default=2),
 ):
   user = get_current_user(authorization)
-  return recommend_learning_path(
-    user_id=user.id,
-    user_access_token=user.access_token,
-    skills_limit=skills_limit,
-    knowledge_limit=knowledge_limit,
-  )
+  try:
+    return recommend_learning_path(
+      user_id=user.id,
+      user_access_token=user.access_token,
+      skills_limit=skills_limit,
+      knowledge_limit=knowledge_limit,
+    )
+  except RuntimeError as e:
+    raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/coach/sessions/{session_id}/message", response_model=SendMessageResponse)

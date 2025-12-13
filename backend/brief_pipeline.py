@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import httpx
+import openai
 from openai import OpenAI
 
 from supabase_client import get_supabase_admin_client
@@ -46,6 +48,172 @@ def _env_topics(name: str) -> list[str] | None:
     return None
   parts = [p.strip() for p in raw.split(",")]
   return [p for p in parts if p]
+
+
+def _llm_primary_provider() -> str:
+  return (os.getenv("DAILY_BRIEF_PRIMARY_PROVIDER") or "anthropic").strip().lower()
+
+
+def _llm_fallback_provider() -> str:
+  return (os.getenv("DAILY_BRIEF_FALLBACK_PROVIDER") or "openai").strip().lower()
+
+
+def _anthropic_api_key() -> str | None:
+  return os.getenv("ANTHROPIC_API_KEY")
+
+
+def _openai_api_key() -> str | None:
+  return os.getenv("OPENAI_API_KEY")
+
+
+def _anthropic_model() -> str:
+  return os.getenv("DAILY_BRIEF_ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+
+
+def _openai_model() -> str:
+  return os.getenv("DAILY_BRIEF_LLM_MODEL", "gpt-4o-mini")
+
+
+def _is_retryable_anthropic_status(status_code: int) -> bool:
+  return status_code == 429 or (500 <= status_code <= 599)
+
+
+def _call_anthropic_messages(*, system: str, user: dict[str, Any], temperature: float, max_tokens: int) -> tuple[str, str]:
+  api_key = _anthropic_api_key()
+  if not api_key:
+    raise RuntimeError("Missing ANTHROPIC_API_KEY")
+
+  model = _anthropic_model()
+  payload = {
+    "model": model,
+    "max_tokens": max_tokens,
+    "temperature": temperature,
+    "system": system,
+    "messages": [
+      {"role": "user", "content": json.dumps(user)},
+    ],
+  }
+
+  try:
+    with httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+      resp = client.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+          "x-api-key": api_key,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        json=payload,
+      )
+
+    if resp.status_code >= 400:
+      if _is_retryable_anthropic_status(resp.status_code):
+        raise RuntimeError(f"anthropic_retryable_http_{resp.status_code}: {resp.text[:500]}")
+      raise RuntimeError(f"anthropic_http_{resp.status_code}: {resp.text[:500]}")
+
+    data = resp.json()
+    blocks = data.get("content")
+    if not isinstance(blocks, list) or not blocks:
+      raise RuntimeError("anthropic_empty_content")
+
+    text_parts: list[str] = []
+    for b in blocks:
+      if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str):
+        text_parts.append(b["text"])
+
+    content = "".join(text_parts).strip()
+    if not content:
+      raise RuntimeError("anthropic_empty_text")
+    return content, model
+  except httpx.TimeoutException as e:
+    raise RuntimeError(f"anthropic_timeout: {e}")
+  except httpx.HTTPError as e:
+    raise RuntimeError(f"anthropic_http_error: {e}")
+
+
+def _call_openai_chat(*, system: str, user: dict[str, Any], temperature: float, max_tokens: int | None) -> tuple[str, str]:
+  api_key = _openai_api_key()
+  if not api_key:
+    raise RuntimeError("Missing OPENAI_API_KEY")
+
+  model = _openai_model()
+  client = OpenAI(api_key=api_key)
+
+  kwargs: dict[str, Any] = {}
+  if max_tokens is not None:
+    kwargs["max_tokens"] = max_tokens
+
+  resp = client.chat.completions.create(
+    model=model,
+    temperature=temperature,
+    messages=[
+      {"role": "system", "content": system},
+      {"role": "user", "content": json.dumps(user)},
+    ],
+    **kwargs,
+  )
+  content = (resp.choices[0].message.content or "").strip()
+  return content, model
+
+
+def _call_llm_json(*, system: str, user: dict[str, Any], temperature: float, max_tokens: int, purpose: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+  providers: list[str] = []
+  primary = _llm_primary_provider()
+  fallback = _llm_fallback_provider()
+  if primary:
+    providers.append(primary)
+  if fallback and fallback != primary:
+    providers.append(fallback)
+
+  tried: list[dict[str, Any]] = []
+  last_err: str | None = None
+
+  for provider in providers:
+    try:
+      if provider == "anthropic":
+        content, model = _call_anthropic_messages(
+          system=system + " Return ONLY valid JSON.",
+          user=user,
+          temperature=temperature,
+          max_tokens=max_tokens,
+        )
+      elif provider == "openai":
+        content, model = _call_openai_chat(
+          system=system + " Return ONLY valid JSON.",
+          user=user,
+          temperature=temperature,
+          max_tokens=max_tokens,
+        )
+      else:
+        raise RuntimeError(f"Unknown provider: {provider}")
+
+      parsed = json.loads(content)
+      if not isinstance(parsed, dict):
+        raise ValueError("LLM response is not a JSON object")
+
+      return parsed, {"ok": True, "provider": provider, "model": model, "purpose": purpose, "tried": tried}
+    except Exception as e:
+      retryable = False
+      if provider == "anthropic":
+        msg = str(e)
+        retryable = msg.startswith("anthropic_retryable_http_") or msg.startswith("anthropic_timeout") or msg.startswith("anthropic_http_error")
+      elif provider == "openai":
+        retryable = isinstance(
+          e,
+          (
+            openai.RateLimitError,
+            openai.APITimeoutError,
+            openai.APIConnectionError,
+            openai.InternalServerError,
+          ),
+        )
+
+      tried.append({"provider": provider, "error": str(e), "retryable": retryable})
+      last_err = str(e)
+      if not retryable:
+        break
+
+  return None, {"ok": False, "purpose": purpose, "error": last_err, "tried": tried}
 
 
 def _select_top_cards(*, hours: int = 24, limit: int = 20, category: str | None = None) -> list[dict[str, Any]]:
@@ -125,13 +293,6 @@ def _topic_payload(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _maybe_llm_overview(brief: dict[str, Any]) -> dict[str, Any]:
-  api_key = os.getenv("OPENAI_API_KEY")
-  if not api_key:
-    return brief
-
-  model = os.getenv("DAILY_BRIEF_LLM_MODEL", "gpt-4o-mini")
-  client = OpenAI(api_key=api_key)
-
   system = (
     "You write a morning/evening brief for young professionals. "
     "Be concise, neutral, and avoid hype. Do not invent facts."
@@ -146,35 +307,24 @@ def _maybe_llm_overview(brief: dict[str, Any]) -> dict[str, Any]:
     },
   }
 
-  try:
-    resp = client.chat.completions.create(
-      model=model,
-      temperature=0.3,
-      messages=[
-        {"role": "system", "content": system},
-        {"role": "user", "content": json.dumps(user)},
-      ],
-    )
-    content = (resp.choices[0].message.content or "").strip()
-    parsed = json.loads(content)
-    if isinstance(parsed, dict):
-      brief["overview"] = parsed.get("overview")
-      brief["tags"] = parsed.get("tags")
+  if not _anthropic_api_key() and not _openai_api_key():
     return brief
-  except Exception as e:
+
+  parsed, qa = _call_llm_json(system=system, user=user, temperature=0.3, max_tokens=450, purpose="brief_overview")
+  if isinstance(parsed, dict):
+    brief["overview"] = parsed.get("overview")
+    brief["tags"] = parsed.get("tags")
+  else:
     brief["overview"] = None
-    brief["llm_error"] = str(e)
-    return brief
+    brief["llm_error"] = qa.get("error")
+    brief["llm_meta"] = qa
+  return brief
 
 
 def _maybe_llm_topic_brief(*, topic: str, items: list[dict[str, Any]]) -> dict[str, Any]:
-  api_key = os.getenv("OPENAI_API_KEY")
-  if not api_key:
-    return {"topic": topic, "overview": None, "tags": [], "items": items, "mode": "no_llm"}
-
-  model = os.getenv("DAILY_BRIEF_LLM_MODEL", "gpt-4o-mini")
   max_tokens = _env_int("DAILY_BRIEF_MAX_TOKENS", 450)
-  client = OpenAI(api_key=api_key)
+  if not _anthropic_api_key() and not _openai_api_key():
+    return {"topic": topic, "overview": None, "tags": [], "items": items, "mode": "no_llm"}
 
   system = (
     "You write a daily brief for young professionals. "
@@ -193,31 +343,14 @@ def _maybe_llm_topic_brief(*, topic: str, items: list[dict[str, Any]]) -> dict[s
     },
   }
 
-  try:
-    resp = client.chat.completions.create(
-      model=model,
-      temperature=0.3,
-      max_tokens=max_tokens,
-      messages=[
-        {"role": "system", "content": system},
-        {"role": "user", "content": json.dumps(user)},
-      ],
-    )
-    content = (resp.choices[0].message.content or "").strip()
-    parsed = json.loads(content)
-    if not isinstance(parsed, dict):
-      raise ValueError("Topic brief is not a JSON object")
-
-    return {
-      "topic": topic,
-      "overview": parsed.get("overview"),
-      "tags": parsed.get("tags") or [],
-      "conversation_starters": parsed.get("conversation_starters") or [],
-      "items": items,
-      "mode": "llm",
-      "model": model,
-    }
-  except Exception as e:
+  parsed, qa = _call_llm_json(
+    system=system,
+    user=user,
+    temperature=0.3,
+    max_tokens=max_tokens,
+    purpose="topic_brief",
+  )
+  if not isinstance(parsed, dict):
     return {
       "topic": topic,
       "overview": None,
@@ -225,9 +358,21 @@ def _maybe_llm_topic_brief(*, topic: str, items: list[dict[str, Any]]) -> dict[s
       "conversation_starters": [],
       "items": items,
       "mode": "llm_error",
-      "error": str(e),
-      "model": model,
+      "error": qa.get("error"),
+      "meta": qa,
     }
+
+  return {
+    "topic": topic,
+    "overview": parsed.get("overview"),
+    "tags": parsed.get("tags") or [],
+    "conversation_starters": parsed.get("conversation_starters") or [],
+    "items": items,
+    "mode": "llm",
+    "provider": qa.get("provider"),
+    "model": qa.get("model"),
+    "meta": qa,
+  }
 
 
 def run_daily_brief(audience: str = "global") -> BriefResult:

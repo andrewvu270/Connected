@@ -4,7 +4,7 @@ import type { ChangeEvent } from "react";
 import { useState } from "react";
 import Link from "next/link";
 
-import { supabase } from "../../src/lib/supabaseClient";
+import { login, signup } from "../../src/lib/authClient";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -13,23 +13,32 @@ export default function LoginPage() {
 
   async function signIn() {
     setStatus(null);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      setStatus(error.message);
-      return;
+    try {
+      const session = await login(email, password);
+      if (!session.access_token) {
+        setStatus("Signed in, but no session returned (email confirmation may be enabled). Check your inbox.");
+        return;
+      }
+      setStatus("Signed in");
+      window.location.href = "/practice";
+    } catch (e: any) {
+      setStatus(e?.message ?? "Login failed");
     }
-    setStatus("Signed in");
-    window.location.href = "/practice";
   }
 
   async function signUp() {
     setStatus(null);
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) {
-      setStatus(error.message);
-      return;
+    try {
+      const session = await signup(email, password);
+      if (!session.access_token) {
+        setStatus("Signed up. If email confirmation is enabled, check your inbox.");
+        return;
+      }
+      setStatus("Signed up");
+      window.location.href = "/practice";
+    } catch (e: any) {
+      setStatus(e?.message ?? "Signup failed");
     }
-    setStatus("Signed up. If email confirmation is enabled, check your inbox.");
   }
 
   return (

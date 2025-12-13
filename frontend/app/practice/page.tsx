@@ -4,7 +4,7 @@ import type { ChangeEvent, KeyboardEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-import { supabase } from "../../src/lib/supabaseClient";
+import { fetchAuthed, requireAuthOrRedirect } from "../../src/lib/authClient";
 
 type ChatMessage = {
   role: "user" | "coach";
@@ -24,33 +24,26 @@ export default function PracticePage() {
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then((res: any) => {
-      const data = res?.data;
-      if (!data.session) {
-        window.location.href = "/login";
-      }
-    });
+    requireAuthOrRedirect("/login");
   }, []);
 
   async function startCoachSession() {
     setStatus(null);
     setVapiConfig(null);
     setDrillSessionId(null);
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (!token) {
-      window.location.href = "/login";
-      return;
-    }
 
-    const res = await fetch(`${aiUrl}/coach/sessions/start`, {
+    const res = await fetchAuthed(`${aiUrl}/coach/sessions/start`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`
       },
       body: JSON.stringify({ mode: "coach" })
     });
+
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
 
     if (!res.ok) {
       setStatus(`Failed to start session: ${res.status}`);
@@ -65,18 +58,11 @@ export default function PracticePage() {
   async function startTextDrill() {
     setStatus(null);
     setVapiConfig(null);
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (!token) {
-      window.location.href = "/login";
-      return;
-    }
 
-    const res = await fetch(`${aiUrl}/mascot/drill/start`, {
+    const res = await fetchAuthed(`${aiUrl}/mascot/drill/start`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`
       },
       body: JSON.stringify({
         provider: "text",
@@ -87,6 +73,11 @@ export default function PracticePage() {
         lesson_ids: []
       })
     });
+
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
 
     if (!res.ok) {
       setStatus(`Failed to start text drill: ${res.status}`);
@@ -102,18 +93,11 @@ export default function PracticePage() {
 
   async function startVoiceDrill() {
     setStatus(null);
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (!token) {
-      window.location.href = "/login";
-      return;
-    }
 
-    const res = await fetch(`${aiUrl}/mascot/drill/start`, {
+    const res = await fetchAuthed(`${aiUrl}/mascot/drill/start`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`
       },
       body: JSON.stringify({
         provider: "vapi",
@@ -124,6 +108,11 @@ export default function PracticePage() {
         lesson_ids: []
       })
     });
+
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
 
     if (!res.ok) {
       setStatus(`Failed to start voice drill: ${res.status}`);
@@ -146,21 +135,18 @@ export default function PracticePage() {
     setInput("");
     setMessages((m: ChatMessage[]) => [...m, { role: "user", content: text }]);
 
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (!token) {
-      window.location.href = "/login";
-      return;
-    }
-
-    const res = await fetch(`${aiUrl}/coach/sessions/${sessionId}/message`, {
+    const res = await fetchAuthed(`${aiUrl}/coach/sessions/${sessionId}/message`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`
       },
       body: JSON.stringify({ content: text })
     });
+
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
 
     if (!res.ok) {
       setStatus(`Failed to send: ${res.status}`);

@@ -3,6 +3,29 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
+class AuthEmailPasswordRequest(BaseModel):
+  email: str
+  password: str
+
+
+class AuthRefreshRequest(BaseModel):
+  refresh_token: str
+
+
+class AuthSessionResponse(BaseModel):
+  access_token: str | None = None
+  refresh_token: str | None = None
+  token_type: str | None = None
+  expires_in: int | None = None
+  expires_at: int | None = None
+  user: dict | None = None
+
+
+class AuthMeResponse(BaseModel):
+  id: str
+  email: str | None = None
+
+
 class NewsSourceIn(BaseModel):
   name: str
   source_type: str
