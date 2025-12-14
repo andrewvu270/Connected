@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -77,12 +79,33 @@ class DrillSessionResponse(BaseModel):
   time_budget: str | None = None
   lesson_ids: list[str] | None = None
   prompt: dict | None = None
+  feedback: str | None = None
   events: list | None = None
-  transcript: dict | None = None
+  transcript: Any | None = None
   vapi_call_id: str | None = None
   coach_session_id: str | None = None
   created_at: str | None = None
   updated_at: str | None = None
+
+
+class DrillSessionListItem(BaseModel):
+  id: str
+  provider: str | None = None
+  status: str | None = None
+  setting: str | None = None
+  goal: str | None = None
+  person: str | None = None
+  time_budget: str | None = None
+  lesson_ids: list[str] | None = None
+  feedback: str | None = None
+  created_at: str | None = None
+  updated_at: str | None = None
+
+
+class DrillSessionListResponse(BaseModel):
+  items: list[DrillSessionListItem]
+  limit: int
+  offset: int
 
 
 class TtsRequest(BaseModel):
@@ -96,7 +119,7 @@ class VapiWebhookEvent(BaseModel):
   status: str | None = None
   call_id: str | None = None
   callId: str | None = None
-  transcript: dict | None = None
+  transcript: Any | None = None
   metadata: dict | None = None
 
 

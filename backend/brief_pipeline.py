@@ -221,10 +221,10 @@ def _select_top_cards(*, hours: int = 24, limit: int = 20, category: str | None 
   since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
   q = (
     supabase.table("news_feed_cards")
-    .select("id, cluster_id, category, card, created_at")
+    .select("id, cluster_id, category, card, created_at, updated_at")
     .eq("published", True)
-    .gte("created_at", since)
-    .order("created_at", desc=True)
+    .gte("updated_at", since)
+    .order("updated_at", desc=True)
     .limit(limit)
   )
   if category:

@@ -3,6 +3,7 @@
 import type { ChangeEvent, KeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import Vapi from "@vapi-ai/web";
 
 import { fetchAuthed, requireAuthOrRedirect } from "../../src/lib/authClient";
@@ -17,6 +18,7 @@ type DrillSession = {
   time_budget?: string | null;
   lesson_ids?: string[] | null;
   prompt?: any;
+  feedback?: string | null;
   events?: any[] | null;
   transcript?: any;
   vapi_call_id?: string | null;
@@ -36,7 +38,178 @@ type VapiPayload = {
   };
 };
 
+function extractVapiEndOfCallReport(events: any[] | null | undefined): any | null {
+  if (!Array.isArray(events) || events.length === 0) return null;
+
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (!ev || typeof ev !== "object") continue;
+
+    const msgType = ev?.message?.type;
+    if (msgType === "end-of-call-report" || msgType === "call-ended-report") {
+      return ev;
+    }
+
+    if (ev?.type === "end-of-call-report" || ev?.type === "call-ended-report") {
+      return ev;
+    }
+  }
+
+  return null;
+}
+
+function extractVapiEndOfCallSummary(events: any[] | null | undefined): string | null {
+  const report = extractVapiEndOfCallReport(events);
+  if (!report) return null;
+
+  const reportBody = report?.message?.analysis ?? report?.analysis ?? report;
+  const summary =
+    reportBody?.summary ??
+    reportBody?.artifact?.summary ??
+    reportBody?.artifact?.report ??
+    reportBody?.report;
+  if (typeof summary === "string" && summary.trim()) return summary.trim();
+  return null;
+}
+
+type TranscriptMsg = { role: "user" | "coach"; content: string };
+
+function normalizeTranscript(transcript: any): TranscriptMsg[] {
+  if (!transcript) return [];
+
+  const asText = (v: any): string => {
+    if (typeof v === "string") return v;
+    if (v == null) return "";
+    return String(v);
+  };
+
+  const parseItem = (item: any): TranscriptMsg | null => {
+    if (typeof item === "string") {
+      const t = item.trim();
+      if (!t) return null;
+      return { role: "coach", content: t };
+    }
+
+    if (!item || typeof item !== "object") return null;
+
+    const roleRaw = (
+      item.role ??
+      item.speaker ??
+      item.from ??
+      item.userRole ??
+      item.type
+    );
+    const roleStr = asText(roleRaw).toLowerCase();
+    const role: "user" | "coach" =
+      roleStr === "assistant" || roleStr === "ai" || roleStr === "coach" ? "coach" : "user";
+
+    const content =
+      item.content ??
+      item.text ??
+      item.transcript ??
+      item.message ??
+      item.utterance;
+    const t = asText(content).trim();
+    if (!t) return null;
+    return { role, content: t };
+  };
+
+  if (Array.isArray(transcript)) {
+    return transcript.map(parseItem).filter(Boolean) as TranscriptMsg[];
+  }
+
+  if (typeof transcript === "object") {
+    const maybeMessages =
+      transcript.messages ?? transcript.turns ?? transcript.items ?? transcript.transcript;
+    if (Array.isArray(maybeMessages)) {
+      return maybeMessages.map(parseItem).filter(Boolean) as TranscriptMsg[];
+    }
+  }
+
+  const t = asText(transcript).trim();
+  return t ? [{ role: "coach", content: t }] : [];
+}
+
+
+function generateDrillFeedback(drill: DrillSession | null): string | null {
+  if (!drill) return null;
+  const s = (drill.status ?? "").toLowerCase();
+  if (s !== "completed" && s !== "failed") return null;
+
+  const prompt = drill.prompt ?? {};
+  const objective = typeof prompt.objective === "string" ? prompt.objective : "";
+  const rubric = Array.isArray(prompt.rubric) ? (prompt.rubric as any[]) : [];
+  const setting = typeof drill.setting === "string" ? drill.setting : "";
+  const goalLabel = typeof drill.goal === "string" ? drill.goal : "";
+
+  const msgs = normalizeTranscript(drill.transcript);
+  const userMsgs = msgs.filter((m) => m.role === "user");
+  const userTextRaw = userMsgs.map((m) => m.content).join("\n");
+  const userText = userTextRaw.toLowerCase();
+
+  const questionCount = (userText.match(/\?/g) ?? []).length;
+  const openEndedCount = (userText.match(/\b(what|how|why|tell me|describe|when|where)\b[^\n\?]*\?/g) ?? []).length;
+  const hasFollowUp = /\b(tell me more|what about|how about|can you elaborate|say more|why)\b/.test(userText);
+  const sharedDetail = /\b(i\b|i'm\b|im\b|i’ve\b|i've\b|my\b|me\b)\b/.test(userText) && userText.replace(/\s+/g, " ").length >= 40;
+
+  const strengths: string[] = [];
+  const improvements: string[] = [];
+
+  if (openEndedCount >= 2) strengths.push("You asked multiple open-ended questions, which kept the conversation moving.");
+  else improvements.push("Ask more open-ended questions (start with 'what', 'how', 'why') to keep it flowing.");
+
+  if (hasFollowUp || questionCount >= 3) strengths.push("You used follow-up questions instead of switching topics too quickly.");
+  else improvements.push("Add at least one follow-up (e.g. 'What got you into that?' / 'Tell me more about…').");
+
+  if (sharedDetail) strengths.push("You shared a bit about yourself, which helps build rapport.");
+  else improvements.push("Share one short relevant detail about yourself to build connection.");
+
+  const goal = String(drill.goal ?? "").toLowerCase();
+  if (goal.includes("avoid") || goal.includes("silence") || goal.includes("flow")) {
+    if (questionCount >= 2) strengths.push("Your questions helped prevent awkward pauses.");
+    else improvements.push("When it feels like it might stall, ask a simple next question to keep momentum.");
+  }
+
+  const summary = extractVapiEndOfCallSummary(drill.events);
+
+  const lessonRefs = Array.isArray(prompt.lesson_refs) ? (prompt.lesson_refs as any[]) : [];
+  const lessonTitles = lessonRefs
+    .map((r) => (r && typeof r === "object" ? r.title : null))
+    .filter((t) => typeof t === "string" && t.trim())
+    .map((t) => String(t).trim());
+  const lessonIds = Array.isArray(drill.lesson_ids) ? drill.lesson_ids.filter(Boolean) : [];
+  const lessonLine = lessonTitles.length
+    ? `\n\nLessons to apply next time: ${lessonTitles.join(", ")}`
+    : lessonIds.length
+      ? `\n\nLessons to apply next time: ${lessonIds.join(", ")}`
+      : "";
+
+  const strengthsText = strengths.length ? strengths.slice(0, 3).join(" ") : "You stayed engaged and kept participating.";
+  const improvementsText = improvements.length ? improvements.slice(0, 3).join(" ") : "Keep doing the same structure: open-ended question → follow-up → share a small detail.";
+
+  const nextStep = rubric.length
+    ? `Next time, focus on: ${String(rubric[0] ?? "Ask one strong open-ended question").trim()}`
+    : "Next time, focus on asking one strong open-ended question and one follow-up.";
+
+  const headerBits: string[] = [];
+  if (setting) headerBits.push(`Setting: ${setting}`);
+  if (goalLabel) headerBits.push(`Goal: ${goalLabel}`);
+  if (objective) headerBits.push(`Objective: ${objective}`);
+  const objectiveLine = headerBits.length ? `${headerBits.join(" • ")}\n\n` : "";
+  const vapiLine = summary ? `\n\nCall summary: ${summary}` : "";
+
+  return (
+    `${objectiveLine}` +
+    `What you did well: ${strengthsText}\n\n` +
+    `What to improve: ${improvementsText}\n\n` +
+    `Next step: ${nextStep}` +
+    `${lessonLine}` +
+    `${vapiLine}`
+  ).trim();
+}
+
 export default function PracticePage() {
+  const searchParams = useSearchParams();
   const aiUrl = useMemo(() => {
     return process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8000";
   }, []);
@@ -128,6 +301,23 @@ export default function PracticePage() {
   }, []);
 
   useEffect(() => {
+    try {
+      const fromQuery = (searchParams?.get("drill") || "").trim();
+      if (fromQuery) {
+        setDrillSessionId(fromQuery);
+        window.localStorage.setItem("lastDrillSessionId", fromQuery);
+        return;
+      }
+      const saved = window.localStorage.getItem("lastDrillSessionId");
+      if (saved && !drillSessionId) {
+        setDrillSessionId(saved);
+      }
+    } catch {
+      // ignore
+    }
+  }, [drillSessionId, searchParams]);
+
+  useEffect(() => {
     if (!vapiPublicKey) return;
     if (vapiRef.current) return;
 
@@ -181,6 +371,12 @@ export default function PracticePage() {
     setVapiConfig(null);
     setDrillSessionId(null);
     setDrill(null);
+
+    try {
+      window.localStorage.removeItem("lastDrillSessionId");
+    } catch {
+      // ignore
+    }
 
     const res = await fetchAuthed(`${aiUrl}/coach/sessions/start`, {
       method: "POST",
@@ -243,6 +439,13 @@ export default function PracticePage() {
 
     const out = await res.json();
     setDrillSessionId(out.drill_session_id ?? null);
+    try {
+      if (out.drill_session_id) {
+        window.localStorage.setItem("lastDrillSessionId", String(out.drill_session_id));
+      }
+    } catch {
+      // ignore
+    }
     setSessionId(out.coach_session_id ?? null);
     const opener = out.prompt?.opener ?? "Okay — let’s roleplay. What would you say next?";
     setMessages([{ role: "coach", content: String(opener) }]);
@@ -289,6 +492,13 @@ export default function PracticePage() {
 
     const out = await res.json();
     setDrillSessionId(out.drill_session_id ?? null);
+    try {
+      if (out.drill_session_id) {
+        window.localStorage.setItem("lastDrillSessionId", String(out.drill_session_id));
+      }
+    } catch {
+      // ignore
+    }
 
     const cfg = (out.vapi ?? null) as VapiPayload | null;
     setVapiConfig((cfg as any) ?? null);
@@ -316,8 +526,6 @@ export default function PracticePage() {
     try {
       const overrides: any = {
         metadata: cfg.metadata ?? {},
-        serverUrl: cfg.webhook_url ?? "",
-        server: cfg.webhook_url ? { url: cfg.webhook_url } : undefined,
       };
 
       await vapiRef.current.start(vapiAssistantId, overrides);
@@ -336,6 +544,18 @@ export default function PracticePage() {
     }
   }
 
+  function clearDrill() {
+    setVapiConfig(null);
+    setDrill(null);
+    setDrillSessionId(null);
+    setPolling(false);
+    try {
+      window.localStorage.removeItem("lastDrillSessionId");
+    } catch {
+      // ignore
+    }
+  }
+
   useEffect(() => {
     if (!drillSessionId) return;
 
@@ -343,6 +563,7 @@ export default function PracticePage() {
 
     let cancelled = false;
     let timer: any = null;
+    let completedNoFeedbackTicks = 0;
 
     async function tick() {
       try {
@@ -366,8 +587,15 @@ export default function PracticePage() {
 
         const s = (json?.status || "").toLowerCase();
         if (s === "completed" || s === "failed") {
-          if (!cancelled) setPolling(false);
-          return;
+          if (json?.feedback && String(json.feedback).trim()) {
+            if (!cancelled) setPolling(false);
+            return;
+          }
+          completedNoFeedbackTicks += 1;
+          if (completedNoFeedbackTicks >= 12) {
+            if (!cancelled) setPolling(false);
+            return;
+          }
         }
       } catch (e: any) {
         if (!cancelled) setStatus(e?.message ?? "Unknown error");
@@ -494,6 +722,13 @@ export default function PracticePage() {
           Stop voice
         </button>
         <button
+          onClick={clearDrill}
+          disabled={!drillSessionId}
+          style={{ padding: "10px 12px" }}
+        >
+          Clear drill
+        </button>
+        <button
           onClick={() => speak(lastCoachMessage)}
           disabled={speaking || !lastCoachMessage}
           style={{ padding: "10px 12px" }}
@@ -504,6 +739,7 @@ export default function PracticePage() {
           <Link href="/learning-path">Learning Path</Link>
           <Link href="/mascot">Mascot</Link>
           <Link href="/feed">Feed</Link>
+          <Link href="/practice/history">History</Link>
         </div>
       </div>
 
@@ -531,46 +767,27 @@ export default function PracticePage() {
             {drill.updated_at ? ` • updated ${drill.updated_at}` : ""}
           </div>
 
-          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>
-            Events: {Array.isArray(drill.events) ? drill.events.length : 0}
-            {drill.vapi_call_id ? ` • call_id: ${drill.vapi_call_id}` : ""}
-          </div>
-
-          {drill.transcript ? (
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>Transcript</div>
-              <pre
-                style={{
-                  marginTop: 6,
-                  padding: 12,
-                  borderRadius: 12,
-                  border: "1px solid rgba(0,0,0,0.12)",
-                  overflowX: "auto",
-                  background: "rgba(0,0,0,0.03)"
-                }}
-              >
-                {JSON.stringify(drill.transcript, null, 2)}
-              </pre>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {vapiConfig ? (
-        <div style={{ marginTop: 12 }}>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>VAPI payload (hand this to your VAPI client)</div>
-          <pre
-            style={{
-              marginTop: 6,
-              padding: 12,
-              borderRadius: 12,
-              border: "1px solid rgba(0,0,0,0.12)",
-              overflowX: "auto",
-              background: "rgba(0,0,0,0.03)"
-            }}
-          >
-            {JSON.stringify(vapiConfig, null, 2)}
-          </pre>
+          {(() => {
+            const feedback = (drill.feedback && String(drill.feedback).trim()) ? String(drill.feedback).trim() : generateDrillFeedback(drill);
+            if (!feedback) return null;
+            return (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>Feedback</div>
+                <div
+                  style={{
+                    marginTop: 6,
+                    padding: 12,
+                    borderRadius: 12,
+                    border: "1px solid rgba(0,0,0,0.12)",
+                    background: "rgba(0,0,0,0.03)",
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {feedback}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       ) : null}
 

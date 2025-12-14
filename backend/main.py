@@ -4,9 +4,10 @@ import time
 import uuid
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -28,6 +29,7 @@ from api_models import (
   AuthMeResponse,
   AuthRefreshRequest,
   AuthSessionResponse,
+  DrillSessionListResponse,
   DrillSessionResponse,
   DrillStartRequest,
   DrillStartResponse,
@@ -49,12 +51,25 @@ from coach_models import SendMessageRequest, SendMessageResponse, StartSessionRe
 from coach_service import send_message, start_session
 from brief_pipeline import run_daily_brief
 from mascot_service import advise as mascot_advise
-from drill_service import get_drill_session, record_vapi_event, start_drill
+from drill_service import get_drill_session_with_feedback, list_drill_sessions, record_vapi_event, start_drill
 from lesson_service import get_knowledge_lesson, get_skill_lesson, list_knowledge_lessons, list_skill_lessons
 from progress_service import list_lesson_progress, progress_summary, upsert_lesson_progress
 from learning_path_service import recommend_learning_path
 
-load_dotenv()
+_DOTENV_PATH = Path(__file__).resolve().with_name(".env")
+load_dotenv(dotenv_path=_DOTENV_PATH)
+
+# load_dotenv() does not override existing environment variables by default.
+# On some systems (esp. Windows), an empty ADMIN_API_KEY env var can exist and
+# would prevent the value in .env from being applied. If ADMIN_API_KEY is still
+# missing after load_dotenv, fallback to reading from the local .env file.
+if not (os.getenv("ADMIN_API_KEY") or "").strip():
+  try:
+    v = (dotenv_values(dotenv_path=_DOTENV_PATH).get("ADMIN_API_KEY") or "").strip()
+    if v:
+      os.environ["ADMIN_API_KEY"] = v
+  except Exception:
+    pass
 
 _request_id_ctx: ContextVar[str | None] = ContextVar("request_id", default=None)
 
@@ -251,23 +266,58 @@ def tts_endpoint(payload: TtsRequest, authorization: str | None = Header(default
 @app.post("/jobs/news/run")
 def run_news_job(x_admin_key: str | None = Header(default=None)):
   _require_admin(x_admin_key)
-  if not news_job:
-    raise HTTPException(status_code=503, detail="News job pipeline not available (langgraph dependency missing)")
   logger.info("news_job_start")
-  out = news_job.invoke({})
-  logger.info("news_job_done", extra={"result": out.get("result") if isinstance(out, dict) else None})
-  return out
+
+  if news_job:
+    out = news_job.invoke({})
+    logger.info("news_job_done", extra={"result": out.get("result") if isinstance(out, dict) else None})
+    return out
+
+  try:
+    from news_pipeline import run_news_pipeline
+
+    res = run_news_pipeline()
+    out = {
+      "mode": "direct",
+      "result": {
+        "sources": res.sources,
+        "articles_fetched": res.articles_fetched,
+        "articles_upserted": res.articles_upserted,
+        "clusters_touched": res.clusters_touched,
+        "cards_published": res.cards_published,
+      },
+    }
+    logger.info("news_job_done", extra={"result": out.get("result")})
+    return out
+  except Exception as e:
+    raise HTTPException(status_code=500, detail=str(e) or "News pipeline failed")
 
 
 @app.post("/jobs/brief/run")
 def run_brief_job(audience: str = "global", x_admin_key: str | None = Header(default=None)):
   _require_admin(x_admin_key)
-  if not brief_job:
-    raise HTTPException(status_code=503, detail="Brief job pipeline not available (langgraph dependency missing)")
   logger.info("brief_job_start", extra={"audience": audience})
-  out = brief_job.invoke({"audience": audience})
-  logger.info("brief_job_done", extra={"result": out.get("result") if isinstance(out, dict) else None})
-  return out
+
+  if brief_job:
+    out = brief_job.invoke({"audience": audience})
+    logger.info("brief_job_done", extra={"result": out.get("result") if isinstance(out, dict) else None})
+    return out
+
+  try:
+    res = run_daily_brief(audience=audience)
+    out = {
+      "mode": "direct",
+      "result": {
+        "audience": res.audience,
+        "brief_date": res.brief_date,
+        "items_selected": res.items_selected,
+        "stored": res.stored,
+      },
+    }
+    logger.info("brief_job_done", extra={"result": out.get("result")})
+    return out
+  except Exception as e:
+    raise HTTPException(status_code=500, detail=str(e) or "Brief pipeline failed")
 
 
 @app.post("/jobs/brief/run_global")
@@ -299,6 +349,24 @@ def seed_news_sources(payload: SeedNewsSourcesRequest, x_admin_key: str | None =
   rows = [s.model_dump() for s in payload.sources]
   res = supabase.table("news_sources").upsert(rows, on_conflict="url").execute()
   return {"inserted": len(res.data or [])}
+
+
+@app.get("/admin/news/sources")
+def list_news_sources(
+  x_admin_key: str | None = Header(default=None),
+  enabled: bool | None = Query(default=None),
+  limit: int = Query(default=200, ge=1, le=500),
+  offset: int = Query(default=0, ge=0),
+):
+  _require_admin(x_admin_key)
+  supabase = get_supabase_admin_client()
+  q = supabase.table("news_sources").select("id,name,source_type,url,category,enabled,created_at")
+  if enabled is not None:
+    q = q.eq("enabled", enabled)
+  res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+  if getattr(res, "error", None):
+    raise HTTPException(status_code=500, detail=str(res.error))
+  return {"data": res.data or [], "limit": limit, "offset": offset}
 
 
 @app.post("/admin/news/sources")
@@ -412,19 +480,60 @@ def auth_me(authorization: str | None = Header(default=None)):
 
 
 @app.get("/news/feed")
-def get_news_feed(limit: int = Query(default=50, ge=1, le=200)):
+def get_news_feed(
+  limit: int = Query(default=50, ge=10, le=200),
+  diversify: bool = Query(default=False),
+  max_per_category: int | None = Query(default=None, ge=1, le=50),
+):
   supabase = get_supabase_admin_client()
+  fetch_limit = limit
+  if diversify or max_per_category:
+    fetch_limit = min(200, max(limit * 4, limit))
   res = (
     supabase.table("news_feed_cards")
-    .select("id, category, card, created_at")
+    .select("id, category, card, created_at, updated_at")
     .eq("published", True)
-    .order("created_at", desc=True)
-    .limit(limit)
+    .order("updated_at", desc=True)
+    .limit(fetch_limit)
     .execute()
   )
   if getattr(res, "error", None):
     raise HTTPException(status_code=500, detail=str(res.error))
-  return {"data": res.data or []}
+
+  rows = res.data or []
+  if not diversify and not max_per_category:
+    return {"data": rows[:limit]}
+
+  by_cat: dict[str, list[dict[str, Any]]] = {}
+  cat_order: list[str] = []
+  for row in rows:
+    if not isinstance(row, dict):
+      continue
+    cat = row.get("category") or ""
+    if cat not in by_cat:
+      by_cat[cat] = []
+      cat_order.append(cat)
+    by_cat[cat].append(row)
+
+  if max_per_category:
+    for cat in list(by_cat.keys()):
+      by_cat[cat] = (by_cat.get(cat) or [])[:max_per_category]
+
+  out: list[dict[str, Any]] = []
+  while len(out) < limit:
+    progressed = False
+    for cat in cat_order:
+      bucket = by_cat.get(cat) or []
+      if not bucket:
+        continue
+      out.append(bucket.pop(0))
+      progressed = True
+      if len(out) >= limit:
+        break
+    if not progressed:
+      break
+
+  return {"data": out}
 
 
 @app.get("/news/brief")
@@ -632,10 +741,21 @@ def mascot_advise_endpoint(payload: MascotAdviseRequest, authorization: str | No
 @app.get("/drills/{drill_session_id}", response_model=DrillSessionResponse)
 def get_drill_session_endpoint(drill_session_id: str, authorization: str | None = Header(default=None)):
   user = get_current_user(authorization)
-  row = get_drill_session(user_access_token=user.access_token, drill_session_id=drill_session_id)
+  row = get_drill_session_with_feedback(user_access_token=user.access_token, drill_session_id=drill_session_id)
   if not row:
     raise HTTPException(status_code=404, detail="Drill session not found")
   return row
+
+
+@app.get("/drills", response_model=DrillSessionListResponse)
+def list_drills_endpoint(
+  authorization: str | None = Header(default=None),
+  limit: int = Query(default=20, ge=1, le=100),
+  offset: int = Query(default=0, ge=0),
+):
+  user = get_current_user(authorization)
+  items = list_drill_sessions(user_access_token=user.access_token, limit=limit, offset=offset)
+  return {"items": items, "limit": limit, "offset": offset}
 
 
 @app.post("/mascot/drill/start", response_model=DrillStartResponse)

@@ -31,7 +31,7 @@ export default function FeedPage() {
       try {
         await requireAuthOrRedirect("/login");
 
-        const res = await fetchAuthed(`${aiUrl}/news/feed?limit=50`, { cache: "no-store" });
+        const res = await fetchAuthed(`${aiUrl}/news/feed?limit=50&diversify=true`, { cache: "no-store" });
         if (!res.ok) {
           setError(`Error: ${res.status}`);
           return;
