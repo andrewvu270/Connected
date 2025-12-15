@@ -108,6 +108,15 @@ class DrillSessionListResponse(BaseModel):
   offset: int
 
 
+class DrillCompleteRequest(BaseModel):
+  transcript: Any | None = None
+
+
+class DrillCompleteResponse(BaseModel):
+  ok: bool = True
+  drill_session_id: str
+
+
 class TtsRequest(BaseModel):
   text: str
   voice: str | None = None

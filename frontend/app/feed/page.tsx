@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import AppShell from "../../src/components/AppShell";
+import { Badge } from "../../src/components/ui/Badge";
+import { Button } from "../../src/components/ui/Button";
+import { Card, CardContent } from "../../src/components/ui/Card";
 import { fetchAuthed, requireAuthOrRedirect } from "../../src/lib/authClient";
 
 type FeedRow = {
@@ -54,70 +58,67 @@ export default function FeedPage() {
   }, [aiUrl]);
 
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
-      <h1 style={{ margin: 0 }}>Feed</h1>
-      <p style={{ marginTop: 8, opacity: 0.8 }}>Rolling updates (latest 50)</p>
+    <AppShell title="Feed" subtitle="Rolling updates (latest 50). Diversified across categories.">
+      {loading ? <div className="text-sm text-muted">Loading…</div> : null}
+      {error ? <div className="text-sm text-red-600">{error}</div> : null}
 
-      {loading ? <div style={{ marginTop: 16, opacity: 0.8 }}>Loading…</div> : null}
-      {error ? (
-        <div style={{ marginTop: 16, color: "#b00020" }}>{error}</div>
-      ) : null}
-
-      <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+      <div className="mt-6 grid gap-4 md:grid-cols-2">
         {data.map((row) => {
           const card = row.card || {};
           const sourceUrl = Array.isArray(card.sources) && card.sources[0]?.url ? card.sources[0]?.url : null;
           const why = Array.isArray(card.why_it_matters) ? card.why_it_matters : [];
 
           return (
-            <article
-              key={row.id}
-              style={{
-                border: "1px solid rgba(0,0,0,0.12)",
-                borderRadius: 12,
-                padding: 12,
-              }}
-            >
-              <div style={{ fontSize: 12, opacity: 0.7 }}>{row.category ?? ""}</div>
-              <div style={{ fontWeight: 600, marginTop: 6 }}>{card.title ?? "Untitled"}</div>
-              {card.what_happened ? <div style={{ marginTop: 8, opacity: 0.9 }}>{card.what_happened}</div> : null}
-
-              {why.length ? (
-                <ul style={{ marginTop: 10, marginBottom: 0, paddingLeft: 18 }}>
-                  {why.slice(0, 3).map((b, i) => (
-                    <li key={i} style={{ marginTop: i === 0 ? 0 : 6 }}>
-                      {b}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-
-              {card.talk_track ? (
-                <div style={{ marginTop: 10, fontSize: 13, opacity: 0.9 }}>
-                  <span style={{ fontWeight: 600 }}>Talk track:</span> {card.talk_track}
+            <Card key={row.id} className="overflow-hidden">
+              <CardContent className="p-6">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge>{row.category ?? ""}</Badge>
+                    </div>
+                    <div className="mt-3 text-base font-semibold tracking-tight">
+                      {card.title ?? "Untitled"}
+                    </div>
+                  </div>
+                  {sourceUrl ? (
+                    <a href={sourceUrl} target="_blank" rel="noreferrer">
+                      <Button size="sm">Source</Button>
+                    </a>
+                  ) : null}
                 </div>
-              ) : null}
 
-              {card.smart_question ? (
-                <div style={{ marginTop: 6, fontSize: 13, opacity: 0.9 }}>
-                  <span style={{ fontWeight: 600 }}>Ask:</span> {card.smart_question}
-                </div>
-              ) : null}
+                {card.what_happened ? (
+                  <div className="mt-3 text-sm leading-relaxed text-muted">
+                    {card.what_happened}
+                  </div>
+                ) : null}
 
-              {sourceUrl ? (
-                <a
-                  href={sourceUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ display: "inline-block", marginTop: 10 }}
-                >
-                  Source
-                </a>
-              ) : null}
-            </article>
+                {why.length ? (
+                  <ul className="mt-4 grid gap-2 pl-5 text-sm text-muted">
+                    {why.slice(0, 3).map((b, i) => (
+                      <li key={i}>{b}</li>
+                    ))}
+                  </ul>
+                ) : null}
+
+                {card.talk_track ? (
+                  <div className="mt-4 rounded-xl border border-border bg-bg p-4 text-sm">
+                    <div className="text-xs font-medium text-muted">Talk track</div>
+                    <div className="mt-1 leading-relaxed text-text">{card.talk_track}</div>
+                  </div>
+                ) : null}
+
+                {card.smart_question ? (
+                  <div className="mt-3 rounded-xl border border-border bg-bg p-4 text-sm">
+                    <div className="text-xs font-medium text-muted">Smart question</div>
+                    <div className="mt-1 leading-relaxed text-text">{card.smart_question}</div>
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
           );
         })}
       </div>
-    </main>
+    </AppShell>
   );
 }

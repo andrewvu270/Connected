@@ -2,7 +2,7 @@
 
 import Script from "next/script";
 
-export default function MascotCanvas() {
+export default function MascotCanvas({ height = 360, className }: { height?: number; className?: string }) {
   const MVScript = Script as any;
 
   return (
@@ -18,9 +18,10 @@ export default function MascotCanvas() {
         src="/mascots/swag.glb"
         style={{
           width: "100%",
-          height: 360,
+          height,
           background: "transparent",
         }}
+        className={className}
         bounds="tight"
         camera-controls
         interaction-prompt="none"

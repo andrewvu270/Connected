@@ -4,6 +4,9 @@ import type { ChangeEvent } from "react";
 import { useState } from "react";
 import Link from "next/link";
 
+import { Button } from "../../src/components/ui/Button";
+import { Card, CardContent, CardHeader, CardSubtitle, CardTitle } from "../../src/components/ui/Card";
+import { Input } from "../../src/components/ui/Input";
 import { login, signup } from "../../src/lib/authClient";
 
 export default function LoginPage() {
@@ -42,45 +45,51 @@ export default function LoginPage() {
   }
 
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui, sans-serif", maxWidth: 420 }}>
-      <h1 style={{ margin: 0 }}>Login</h1>
-      <p style={{ marginTop: 8, opacity: 0.8 }}>
-        Use email + password (MVP)
-      </p>
+    <main className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-6 py-16">
+      <div className="w-full max-w-md">
+        <div className="mb-10">
+          <Link href="/" className="text-sm font-semibold tracking-tight">
+            Connected
+          </Link>
+        </div>
 
-      <label style={{ display: "block", marginTop: 16 }}>
-        Email
-        <input
-          value={email}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)}
-          style={{ width: "100%", padding: 10, marginTop: 6 }}
-        />
-      </label>
+        <Card>
+          <CardHeader>
+            <CardTitle>Sign in</CardTitle>
+            <CardSubtitle>Use email + password.</CardSubtitle>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <label className="grid gap-2 text-sm">
+              <span className="text-muted">Email</span>
+              <Input value={email} onChange={(e: ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)} />
+            </label>
 
-      <label style={{ display: "block", marginTop: 12 }}>
-        Password
-        <input
-          value={password}
-          type="password"
-          onChange={(e: ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
-          style={{ width: "100%", padding: 10, marginTop: 6 }}
-        />
-      </label>
+            <label className="grid gap-2 text-sm">
+              <span className="text-muted">Password</span>
+              <Input
+                value={password}
+                type="password"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
+              />
+            </label>
 
-      <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-        <button onClick={signIn} style={{ padding: "10px 12px" }}>
-          Sign In
-        </button>
-        <button onClick={signUp} style={{ padding: "10px 12px" }}>
-          Sign Up
-        </button>
+            <div className="mt-2 grid gap-3 sm:grid-cols-2">
+              <Button variant="primary" onClick={signIn}>
+                Sign in
+              </Button>
+              <Button onClick={signUp}>Create account</Button>
+            </div>
+
+            {status ? <div className="text-sm text-muted">{status}</div> : null}
+          </CardContent>
+        </Card>
+
+        <div className="mt-6 text-sm text-muted">
+          <Link href="/" className="hover:text-text">
+            Back to home
+          </Link>
+        </div>
       </div>
-
-      {status ? <p style={{ marginTop: 12 }}>{status}</p> : null}
-
-      <p style={{ marginTop: 16 }}>
-        <Link href="/">Home</Link>
-      </p>
     </main>
   );
 }

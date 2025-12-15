@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import AppShell from "../../../../src/components/AppShell";
 import { fetchAuthed, requireAuthOrRedirect } from "../../../../src/lib/authClient";
 
 type LessonType = "skill" | "knowledge";
@@ -46,9 +47,9 @@ function ContentView({ value }: { value: any }) {
   if (typeof value === "string") {
     const parts = value.split("\n").map((p) => p.trim()).filter(Boolean);
     return (
-      <div style={{ display: "grid", gap: 10 }}>
+      <div className="grid gap-3">
         {parts.map((p, i) => (
-          <p key={i} style={{ margin: 0, lineHeight: 1.5 }}>
+          <p key={i} className="m-0 text-sm leading-relaxed text-text">
             {p}
           </p>
         ))}
@@ -58,7 +59,7 @@ function ContentView({ value }: { value: any }) {
 
   if (Array.isArray(value)) {
     return (
-      <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 8 }}>
+      <ul className="m-0 grid gap-2 pl-5 text-sm text-text">
         {value.map((item, i) => (
           <li key={i}>
             <ContentView value={item} />
@@ -71,11 +72,13 @@ function ContentView({ value }: { value: any }) {
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, any>);
     return (
-      <div style={{ display: "grid", gap: 12 }}>
+      <div className="grid gap-5">
         {entries.map(([k, v]) => (
-          <div key={k} style={{ borderTop: "1px solid rgba(0,0,0,0.08)", paddingTop: 10 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>{k}</div>
+          <div key={k} className="border-t border-border pt-4">
+            <div className="text-sm font-semibold tracking-tight">{k}</div>
+            <div className="mt-2">
             <ContentView value={v} />
+            </div>
           </div>
         ))}
       </div>
@@ -159,49 +162,68 @@ export default function LessonDetailPage() {
   }
 
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui, sans-serif", maxWidth: 860 }}>
-      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-        <Link href="/learning-path">Back</Link>
-        <Link href="/practice">Practice</Link>
-        <Link href="/feed">Feed</Link>
-      </div>
-
-      {loading ? <div style={{ marginTop: 16, opacity: 0.8 }}>Loading…</div> : null}
-      {error ? <div style={{ marginTop: 16, color: "#b00020" }}>{error}</div> : null}
+    <AppShell
+      title={lesson?.title ?? "Lesson"}
+      subtitle={null}
+      actions={
+        <Link className="rounded-xl border border-border bg-card px-4 py-2 text-sm font-medium" href="/learning-path">
+          Back
+        </Link>
+      }
+    >
+      {loading ? <div className="text-sm text-muted">Loading…</div> : null}
+      {error ? <div className="text-sm text-red-600">{error}</div> : null}
 
       {!loading && lesson ? (
-        <>
-          <h1 style={{ marginTop: 16, marginBottom: 6 }}>{lesson.title}</h1>
+        <div className="grid gap-6">
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
+            <div className="text-xs text-muted">
+              <span className="font-medium text-text">{type}</span>
+              {"phase" in lesson && lesson.phase ? ` • ${lesson.phase}` : ""}
+              {"domain" in lesson && lesson.domain ? ` • ${lesson.domain}` : ""}
+              {"category" in lesson && lesson.category ? ` • ${lesson.category}` : ""}
+              {lesson.read_time_minutes ? ` • ${lesson.read_time_minutes} min` : ""}
+              {lesson.difficulty ? ` • ${lesson.difficulty}` : ""}
+            </div>
 
-          <div style={{ fontSize: 12, opacity: 0.75 }}>
-            <span style={{ fontWeight: 600 }}>{type}</span>
-            {"phase" in lesson && lesson.phase ? ` • ${lesson.phase}` : ""}
-            {"domain" in lesson && lesson.domain ? ` • ${lesson.domain}` : ""}
-            {"category" in lesson && lesson.category ? ` • ${lesson.category}` : ""}
-            {lesson.read_time_minutes ? ` • ${lesson.read_time_minutes} min` : ""}
-            {lesson.difficulty ? ` • ${lesson.difficulty}` : ""}
-          </div>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => mark("started")}
+                disabled={saving}
+                className="rounded-xl border border-border bg-card px-4 py-2 text-sm font-medium disabled:opacity-60"
+              >
+                Mark started
+              </button>
+              <button
+                onClick={() => mark("completed")}
+                disabled={saving}
+                className="rounded-xl bg-text px-4 py-2 text-sm font-medium text-bg disabled:opacity-60"
+              >
+                Mark completed
+              </button>
 
-          <div style={{ display: "flex", gap: 10, marginTop: 14, alignItems: "center" }}>
-            <button onClick={() => mark("started")} disabled={saving} style={{ padding: "10px 12px" }}>
-              Mark started
-            </button>
-            <button onClick={() => mark("completed")} disabled={saving} style={{ padding: "10px 12px" }}>
-              Mark completed
-            </button>
+              {progress?.status ? (
+                <div className="text-sm text-muted">
+                  Status: <span className="font-medium text-text">{progress.status}</span>
+                </div>
+              ) : null}
 
-            {progress?.status ? (
-              <div style={{ fontSize: 12, opacity: 0.8 }}>
-                Status: <span style={{ fontWeight: 600 }}>{progress.status}</span>
+              <div className="ml-auto flex flex-wrap gap-4 text-sm text-muted">
+                <Link className="hover:text-text" href="/practice">
+                  Practice
+                </Link>
+                <Link className="hover:text-text" href="/feed">
+                  Feed
+                </Link>
               </div>
-            ) : null}
+            </div>
           </div>
 
-          <div style={{ marginTop: 18 }}>
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
             <ContentView value={lesson.content} />
           </div>
-        </>
+        </div>
       ) : null}
-    </main>
+    </AppShell>
   );
 }

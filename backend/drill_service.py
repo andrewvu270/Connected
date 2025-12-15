@@ -379,6 +379,28 @@ def list_drill_sessions(
   return res.data or []
 
 
+def complete_drill_session(*, user_access_token: str, drill_session_id: str, transcript: Any | None) -> bool:
+  sb = get_supabase_user_client(user_access_token)
+  updates: dict[str, Any] = {
+    "status": "completed",
+    "updated_at": _now_iso(),
+  }
+  # Feedback generation requires either transcript or an end-of-call summary.
+  # For text drills, the UI provides transcript explicitly.
+  updates["transcript"] = transcript if transcript is not None else []
+
+  res = (
+    sb.table("drill_sessions")
+    .update(updates)
+    .eq("id", drill_session_id)
+    .execute()
+  )
+  _raise_if_supabase_error(res, "Failed to complete drill session")
+
+  # If RLS prevents access or id is unknown, Supabase returns empty data.
+  return bool(getattr(res, "data", None))
+
+
 def _extract_end_of_call_summary(events: Any) -> str | None:
   if not isinstance(events, list):
     return None

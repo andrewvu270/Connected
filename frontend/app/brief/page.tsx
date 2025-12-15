@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import AppShell from "../../src/components/AppShell";
+import { Badge } from "../../src/components/ui/Badge";
+import { Card, CardContent } from "../../src/components/ui/Card";
 import { fetchAuthed, requireAuthOrRedirect } from "../../src/lib/authClient";
 
 type BriefItem = {
@@ -71,53 +74,60 @@ export default function BriefPage() {
   const items = Array.isArray(brief?.items) ? brief!.items! : [];
 
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui, sans-serif", maxWidth: 760 }}>
-      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-        <Link href="/learning-path">Learning Path</Link>
-        <Link href="/feed">Feed</Link>
-      </div>
-
-      <h1 style={{ marginTop: 16, marginBottom: 0 }}>Today’s Brief</h1>
-
-      {loading ? <div style={{ marginTop: 12, opacity: 0.8 }}>Loading…</div> : null}
-      {status ? <div style={{ marginTop: 12, color: "#b00020" }}>{status}</div> : null}
+    <AppShell
+      title="Today’s Brief"
+      subtitle="A short summary grounded in your curated feed."
+      actions={
+        <div className="flex items-center gap-3">
+          <Link className="text-sm text-muted hover:text-text" href="/feed">
+            Feed
+          </Link>
+          <Link className="text-sm text-muted hover:text-text" href="/learning-path">
+            Learning
+          </Link>
+        </div>
+      }
+    >
+      {loading ? <div className="text-sm text-muted">Loading…</div> : null}
+      {status ? <div className="text-sm text-red-600">{status}</div> : null}
 
       {brief?.overview ? (
-        <p style={{ marginTop: 10, opacity: 0.85, lineHeight: 1.5 }}>{brief.overview}</p>
+        <Card className="mt-6">
+          <CardContent className="p-6 text-sm leading-relaxed text-muted">{brief.overview}</CardContent>
+        </Card>
       ) : null}
 
-      <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+      <div className="mt-6 grid gap-4">
         {items.map((it: BriefItem, idx: number) => (
-          <article
-            key={idx}
-            style={{
-              border: "1px solid rgba(0,0,0,0.12)",
-              borderRadius: 12,
-              padding: 12
-            }}
-          >
-            <div style={{ fontSize: 12, opacity: 0.7 }}>{it.category ?? ""}</div>
-            <div style={{ fontWeight: 600, marginTop: 6 }}>{it.title ?? ""}</div>
-            {it.what_happened ? <div style={{ marginTop: 8, opacity: 0.9 }}>{it.what_happened}</div> : null}
-
-            {Array.isArray(it.why_it_matters) && it.why_it_matters.length ? (
-              <ul style={{ marginTop: 10, paddingLeft: 18, display: "grid", gap: 6 }}>
-                {it.why_it_matters.map((b, i) => (
-                  <li key={i} style={{ opacity: 0.9 }}>
-                    {b}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-
-            {it.talk_track ? (
-              <div style={{ marginTop: 10, fontSize: 13, opacity: 0.9 }}>
-                <span style={{ fontWeight: 600 }}>Talk track:</span> {it.talk_track}
+          <Card key={idx}>
+            <CardContent className="p-6">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge>{it.category ?? ""}</Badge>
               </div>
-            ) : null}
-          </article>
+              <div className="mt-3 text-base font-semibold tracking-tight">{it.title ?? ""}</div>
+
+              {it.what_happened ? (
+                <div className="mt-3 text-sm leading-relaxed text-muted">{it.what_happened}</div>
+              ) : null}
+
+              {Array.isArray(it.why_it_matters) && it.why_it_matters.length ? (
+                <ul className="mt-4 grid gap-2 pl-5 text-sm text-muted">
+                  {it.why_it_matters.map((b, i) => (
+                    <li key={i}>{b}</li>
+                  ))}
+                </ul>
+              ) : null}
+
+              {it.talk_track ? (
+                <div className="mt-4 rounded-xl border border-border bg-bg p-4 text-sm">
+                  <div className="text-xs font-medium text-muted">Talk track</div>
+                  <div className="mt-1 leading-relaxed text-text">{it.talk_track}</div>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
         ))}
       </div>
-    </main>
+    </AppShell>
   );
 }

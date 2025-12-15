@@ -3,13 +3,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import AppShell from "../../src/components/AppShell";
+import { Badge } from "../../src/components/ui/Badge";
+import { Button } from "../../src/components/ui/Button";
+import { Card, CardContent, CardHeader, CardSubtitle, CardTitle } from "../../src/components/ui/Card";
 import { fetchAuthed, requireAuthOrRedirect } from "../../src/lib/authClient";
-
-type PhaseProgress = {
-  phase: string;
-  completed: number;
-  total: number;
-};
 
 type SkillLessonSummary = {
   lesson_id: string;
@@ -29,13 +27,9 @@ type KnowledgeLessonSummary = {
   read_time_minutes?: number | null;
 };
 
-type LearningPathResponse = {
-  suggested_phase?: string | null;
-  phase_progress: PhaseProgress[];
-  recommendations: {
-    skills: SkillLessonSummary[];
-    knowledge: KnowledgeLessonSummary[];
-  };
+type SkillGroup = {
+  phase: string;
+  domains: { domain: string; lessons: SkillLessonSummary[] }[];
 };
 
 export default function LearningPathPage() {
@@ -45,7 +39,8 @@ export default function LearningPathPage() {
 
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
-  const [data, setData] = useState<LearningPathResponse | null>(null);
+  const [skills, setSkills] = useState<SkillLessonSummary[]>([]);
+  const [knowledge, setKnowledge] = useState<KnowledgeLessonSummary[]>([]);
 
   useEffect(() => {
     requireAuthOrRedirect("/login");
@@ -55,25 +50,43 @@ export default function LearningPathPage() {
     setStatus(null);
     setLoading(true);
     try {
-      const res = await fetchAuthed(`${aiUrl}/learning_path/recommendations?skills_limit=5&knowledge_limit=2`, {
-        method: "GET",
-        headers: {}
-      });
+      const pageSize = 200;
 
-      if (res.status === 401) {
-        window.location.href = "/login";
-        return;
+      async function fetchAll<T>(path: string): Promise<T[]> {
+        const out: T[] = [];
+        for (let page = 0; page < 10; page++) {
+          const offset = page * pageSize;
+          const res = await fetchAuthed(`${aiUrl}${path}${path.includes("?") ? "&" : "?"}limit=${pageSize}&offset=${offset}`, {
+            method: "GET",
+            headers: {},
+          });
+
+          if (res.status === 401) {
+            window.location.href = "/login";
+            return [];
+          }
+
+          if (!res.ok) {
+            throw new Error(`Failed to load ${path}: ${res.status}`);
+          }
+
+          const chunk = (await res.json()) as T[];
+          if (!Array.isArray(chunk) || chunk.length === 0) break;
+          out.push(...chunk);
+          if (chunk.length < pageSize) break;
+        }
+        return out;
       }
 
-      if (!res.ok) {
-        setStatus(`Failed to load learning path: ${res.status}`);
-        return;
-      }
+      const [skillsRows, knowledgeRows] = await Promise.all([
+        fetchAll<SkillLessonSummary>("/lessons"),
+        fetchAll<KnowledgeLessonSummary>("/knowledge_lessons"),
+      ]);
 
-      const out = (await res.json()) as LearningPathResponse;
-      setData(out);
+      setSkills(Array.isArray(skillsRows) ? skillsRows : []);
+      setKnowledge(Array.isArray(knowledgeRows) ? knowledgeRows : []);
     } catch (e: any) {
-      setStatus(e?.message ?? "Unknown error");
+      setStatus(String(e?.message ?? "Unknown error"));
     } finally {
       setLoading(false);
     }
@@ -107,174 +120,186 @@ export default function LearningPathPage() {
         setStatus(`Failed to update progress: ${res.status}`);
         return;
       }
-
-      await refresh();
     } catch (e: any) {
       setStatus(e?.message ?? "Unknown error");
     }
   }
 
+  const skillGroups = useMemo((): SkillGroup[] => {
+    const byPhase: Record<string, SkillLessonSummary[]> = {};
+    for (const l of skills) {
+      const phase = String(l.phase ?? "Other").trim() || "Other";
+      (byPhase[phase] ||= []).push(l);
+    }
+
+    const phases = Object.keys(byPhase).sort((a, b) => a.localeCompare(b));
+    return phases.map((phase) => {
+      const phaseLessons = byPhase[phase] || [];
+      const byDomain: Record<string, SkillLessonSummary[]> = {};
+      for (const l of phaseLessons) {
+        const domain = String(l.domain ?? "General").trim() || "General";
+        (byDomain[domain] ||= []).push(l);
+      }
+      const domains = Object.keys(byDomain)
+        .sort((a, b) => a.localeCompare(b))
+        .map((domain) => ({
+          domain,
+          lessons: (byDomain[domain] || []).slice().sort((a, b) => a.title.localeCompare(b.title)),
+        }));
+      return { phase, domains };
+    });
+  }, [skills]);
+
+  const knowledgeGroups = useMemo(() => {
+    const byCat: Record<string, KnowledgeLessonSummary[]> = {};
+    for (const l of knowledge) {
+      const cat = String(l.category ?? "General").trim() || "General";
+      (byCat[cat] ||= []).push(l);
+    }
+    return Object.keys(byCat)
+      .sort((a, b) => a.localeCompare(b))
+      .map((category) => ({
+        category,
+        lessons: (byCat[category] || []).slice().sort((a, b) => a.title.localeCompare(b.title)),
+      }));
+  }, [knowledge]);
+
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui, sans-serif", maxWidth: 760 }}>
-      <h1 style={{ margin: 0 }}>Learning Path</h1>
-      <p style={{ marginTop: 8, opacity: 0.8 }}>
-        Recommended next lessons (not locked — you can do anything).
-      </p>
+    <AppShell
+      title="Lessons"
+      subtitle="Browse skills by phase and domain, plus knowledge lessons by category."
+      actions={
+        <div className="flex items-center gap-3">
+          <Button onClick={refresh} variant="primary" disabled={loading}>
+            {loading ? "Refreshing…" : "Refresh"}
+          </Button>
+          <Link className="text-sm text-muted hover:text-text" href="/practice">
+            Practice
+          </Link>
+        </div>
+      }
+    >
+      {status ? <div className="text-sm text-red-600">{status}</div> : null}
 
-      <div style={{ display: "flex", gap: 10, marginTop: 12, alignItems: "center" }}>
-        <button onClick={refresh} style={{ padding: "10px 12px" }} disabled={loading}>
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
-        <Link href="/mascot">Mascot</Link>
-        <Link href="/practice">Practice</Link>
-        <Link href="/feed">Feed</Link>
-        <Link href="/brief">Brief</Link>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Skill lessons</CardTitle>
+            <CardSubtitle>Expand a phase, then a domain, then pick a lesson.</CardSubtitle>
+          </CardHeader>
+          <CardContent>
+            {loading ? <div className="text-sm text-muted">Loading…</div> : null}
+            {!loading && skills.length === 0 ? <div className="text-sm text-muted">No skill lessons found.</div> : null}
+
+            <div className="grid gap-3">
+              {skillGroups.map((phase) => {
+                const phaseCount = phase.domains.reduce((acc, d) => acc + d.lessons.length, 0);
+                return (
+                  <details key={phase.phase} className="rounded-2xl border border-border bg-bg">
+                    <summary className="cursor-pointer select-none px-5 py-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="text-sm font-semibold tracking-tight">{phase.phase}</div>
+                        <div className="text-xs text-muted">{phaseCount} lessons</div>
+                      </div>
+                    </summary>
+
+                    <div className="grid gap-2 px-5 pb-5">
+                      {phase.domains.map((domain) => (
+                        <details key={`${phase.phase}__${domain.domain}`} className="rounded-xl border border-border bg-card">
+                          <summary className="cursor-pointer select-none px-4 py-3">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div className="text-sm font-medium">{domain.domain}</div>
+                              <div className="text-xs text-muted">{domain.lessons.length}</div>
+                            </div>
+                          </summary>
+
+                          <div className="grid gap-2 px-4 pb-4">
+                            {domain.lessons.map((l) => (
+                              <div key={l.lesson_id} className="rounded-xl border border-border bg-bg p-4">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <Link className="text-sm font-semibold tracking-tight hover:underline" href={`/lesson/skill/${encodeURIComponent(l.lesson_id)}`}>
+                                    {l.title}
+                                  </Link>
+                                  <div className="flex flex-wrap gap-2">
+                                    {l.read_time_minutes ? <Badge>{l.read_time_minutes} min</Badge> : null}
+                                    {l.difficulty ? <Badge tone="accent">{l.difficulty}</Badge> : null}
+                                  </div>
+                                </div>
+                                <div className="mt-3 flex flex-wrap gap-3">
+                                  <Link href={`/lesson/skill/${encodeURIComponent(l.lesson_id)}`}>
+                                    <Button size="sm">Open</Button>
+                                  </Link>
+                                  <Button size="sm" onClick={() => markLesson("skill", l.lesson_id, "started")}>
+                                    Mark started
+                                  </Button>
+                                  <Button variant="primary" size="sm" onClick={() => markLesson("skill", l.lesson_id, "completed")}>
+                                    Mark completed
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                  </details>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Knowledge lessons</CardTitle>
+            <CardSubtitle>Expand a category and pick a lesson.</CardSubtitle>
+          </CardHeader>
+          <CardContent>
+            {loading ? <div className="text-sm text-muted">Loading…</div> : null}
+            {!loading && knowledge.length === 0 ? <div className="text-sm text-muted">No knowledge lessons found.</div> : null}
+
+            <div className="grid gap-3">
+              {knowledgeGroups.map((cat) => (
+                <details key={cat.category} className="rounded-2xl border border-border bg-bg">
+                  <summary className="cursor-pointer select-none px-5 py-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-sm font-semibold tracking-tight">{cat.category}</div>
+                      <div className="text-xs text-muted">{cat.lessons.length} lessons</div>
+                    </div>
+                  </summary>
+
+                  <div className="grid gap-2 px-5 pb-5">
+                    {cat.lessons.map((l) => (
+                      <div key={l.lesson_id} className="rounded-xl border border-border bg-card p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <Link className="text-sm font-semibold tracking-tight hover:underline" href={`/lesson/knowledge/${encodeURIComponent(l.lesson_id)}`}>
+                            {l.title}
+                          </Link>
+                          <div className="flex flex-wrap gap-2">
+                            {l.read_time_minutes ? <Badge>{l.read_time_minutes} min</Badge> : null}
+                            {l.difficulty ? <Badge tone="accent">{l.difficulty}</Badge> : null}
+                          </div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-3">
+                          <Link href={`/lesson/knowledge/${encodeURIComponent(l.lesson_id)}`}>
+                            <Button size="sm">Open</Button>
+                          </Link>
+                          <Button size="sm" onClick={() => markLesson("knowledge", l.lesson_id, "started")}>
+                            Mark started
+                          </Button>
+                          <Button variant="primary" size="sm" onClick={() => markLesson("knowledge", l.lesson_id, "completed")}>
+                            Mark completed
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       </div>
-
-      {status ? <p style={{ marginTop: 12 }}>{status}</p> : null}
-
-      {data ? (
-        <>
-          <div style={{ marginTop: 16 }}>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>Suggested phase</div>
-            <div style={{ fontSize: 18, fontWeight: 600 }}>
-              {data.suggested_phase ?? "(none)"}
-            </div>
-          </div>
-
-          <div style={{ marginTop: 16 }}>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>Progress by phase</div>
-            <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-              {(data.phase_progress ?? []).map((p: PhaseProgress) => (
-                <div
-                  key={p.phase}
-                  style={{
-                    border: "1px solid rgba(0,0,0,0.12)",
-                    borderRadius: 12,
-                    padding: 10,
-                    display: "flex",
-                    justifyContent: "space-between"
-                  }}
-                >
-                  <div style={{ fontWeight: 600 }}>{p.phase}</div>
-                  <div style={{ opacity: 0.8 }}>
-                    {p.completed}/{p.total}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ marginTop: 20 }}>
-            <h2 style={{ margin: 0, fontSize: 16 }}>Recommended skills</h2>
-            <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-              {(data.recommendations?.skills ?? []).map((l: SkillLessonSummary) => (
-                <div
-                  key={l.lesson_id}
-                  style={{
-                    border: "1px solid rgba(0,0,0,0.12)",
-                    borderRadius: 12,
-                    padding: 12
-                  }}
-                >
-                  <Link href={`/lesson/skill/${encodeURIComponent(l.lesson_id)}`} style={{ fontWeight: 600 }}>
-                    {l.title}
-                  </Link>
-                  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
-                    {l.phase ? `Phase: ${l.phase}` : ""}
-                    {l.domain ? ` • Domain: ${l.domain}` : ""}
-                    {l.read_time_minutes ? ` • ${l.read_time_minutes} min` : ""}
-                    {l.difficulty ? ` • ${l.difficulty}` : ""}
-                  </div>
-
-                  <div style={{ marginTop: 10 }}>
-                    <Link
-                      href={`/lesson/skill/${encodeURIComponent(l.lesson_id)}`}
-                      style={{ display: "inline-block", fontSize: 13 }}
-                    >
-                      Open lesson
-                    </Link>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-                    <button
-                      onClick={() => markLesson("skill", l.lesson_id, "started")}
-                      style={{ padding: "8px 10px" }}
-                    >
-                      Mark started
-                    </button>
-                    <button
-                      onClick={() => markLesson("skill", l.lesson_id, "completed")}
-                      style={{ padding: "8px 10px" }}
-                    >
-                      Mark completed
-                    </button>
-                  </div>
-                </div>
-              ))}
-
-              {(data.recommendations?.skills ?? []).length === 0 ? (
-                <div style={{ opacity: 0.7 }}>No skill recommendations found.</div>
-              ) : null}
-            </div>
-          </div>
-
-          <div style={{ marginTop: 20 }}>
-            <h2 style={{ margin: 0, fontSize: 16 }}>Recommended knowledge</h2>
-            <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-              {(data.recommendations?.knowledge ?? []).map((l: KnowledgeLessonSummary) => (
-                <div
-                  key={l.lesson_id}
-                  style={{
-                    border: "1px solid rgba(0,0,0,0.12)",
-                    borderRadius: 12,
-                    padding: 12
-                  }}
-                >
-                  <Link href={`/lesson/knowledge/${encodeURIComponent(l.lesson_id)}`} style={{ fontWeight: 600 }}>
-                    {l.title}
-                  </Link>
-                  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
-                    {l.category ? `Category: ${l.category}` : ""}
-                    {l.read_time_minutes ? ` • ${l.read_time_minutes} min` : ""}
-                    {l.difficulty ? ` • ${l.difficulty}` : ""}
-                  </div>
-
-                  <div style={{ marginTop: 10 }}>
-                    <Link
-                      href={`/lesson/knowledge/${encodeURIComponent(l.lesson_id)}`}
-                      style={{ display: "inline-block", fontSize: 13 }}
-                    >
-                      Open lesson
-                    </Link>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-                    <button
-                      onClick={() => markLesson("knowledge", l.lesson_id, "started")}
-                      style={{ padding: "8px 10px" }}
-                    >
-                      Mark started
-                    </button>
-                    <button
-                      onClick={() => markLesson("knowledge", l.lesson_id, "completed")}
-                      style={{ padding: "8px 10px" }}
-                    >
-                      Mark completed
-                    </button>
-                  </div>
-                </div>
-              ))}
-
-              {(data.recommendations?.knowledge ?? []).length === 0 ? (
-                <div style={{ opacity: 0.7 }}>No knowledge recommendations found.</div>
-              ) : null}
-            </div>
-          </div>
-        </>
-      ) : (
-        <div style={{ marginTop: 16, opacity: 0.7 }}>Loading...</div>
-      )}
-    </main>
+    </AppShell>
   );
 }

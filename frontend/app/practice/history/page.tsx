@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
+import AppShell from "../../../src/components/AppShell";
+import { Badge } from "../../../src/components/ui/Badge";
+import { Button } from "../../../src/components/ui/Button";
+import { Card, CardContent } from "../../../src/components/ui/Card";
 import { fetchAuthed, requireAuthOrRedirect } from "../../../src/lib/authClient";
 
 type DrillListItem = {
@@ -65,53 +69,58 @@ export default function PracticeHistoryPage() {
   }, [aiUrl]);
 
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui, sans-serif", maxWidth: 820 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <h1 style={{ margin: 0 }}>Practice History</h1>
-        <Link href="/practice">Back to practice</Link>
-      </div>
+    <AppShell
+      title="Practice History"
+      subtitle="Your recent drills and feedback."
+      actions={
+        <Link href="/practice">
+          <Button>Back to practice</Button>
+        </Link>
+      }
+    >
+      {status ? <div className="text-sm text-red-600">{status}</div> : null}
 
-      {status ? <p style={{ marginTop: 12 }}>{status}</p> : null}
+      <div className="mt-6 grid gap-3">
+        {items.length === 0 ? <div className="text-sm text-muted">No drills yet.</div> : null}
 
-      <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-        {items.length === 0 ? (
-          <div style={{ opacity: 0.7 }}>No drills yet.</div>
-        ) : (
-          items.map((d) => {
-            const preview = String(d.feedback ?? "").trim();
-            const previewShort = preview.length > 180 ? preview.slice(0, 180) + "…" : preview;
-            return (
-              <div
-                key={d.id}
-                style={{
-                  border: "1px solid rgba(0,0,0,0.12)",
-                  borderRadius: 12,
-                  padding: 12,
-                  background: "rgba(0,0,0,0.02)",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                  <div style={{ fontWeight: 600 }}>
-                    {d.setting ?? ""} • {d.goal ?? ""} • {d.status ?? ""}
+        {items.map((d) => {
+          const preview = String(d.feedback ?? "").trim();
+          const previewShort = preview.length > 220 ? preview.slice(0, 220) + "…" : preview;
+          const title = [d.setting, d.goal, d.status].filter(Boolean).join(" • ");
+
+          return (
+            <Card key={d.id}>
+              <CardContent className="p-6">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold tracking-tight">{title}</div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {d.provider ? <Badge>{d.provider}</Badge> : null}
+                      {d.time_budget ? <Badge>{d.time_budget}</Badge> : null}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 12, opacity: 0.7 }}>{d.created_at ?? ""}</div>
+                  <div className="text-xs text-muted">{d.created_at ?? ""}</div>
                 </div>
 
                 {previewShort ? (
-                  <div style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>{previewShort}</div>
+                  <div className="mt-4 whitespace-pre-wrap text-sm text-muted">{previewShort}</div>
                 ) : (
-                  <div style={{ marginTop: 8, opacity: 0.7 }}>No feedback yet.</div>
+                  <div className="mt-4 text-sm text-muted">No feedback yet.</div>
                 )}
 
-                <div style={{ marginTop: 10, display: "flex", gap: 12 }}>
-                  <Link href={`/practice?drill=${encodeURIComponent(d.id)}`}>Open</Link>
-                  <span style={{ fontSize: 12, opacity: 0.7 }}>id: {d.id}</span>
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <Link href={`/practice?drill=${encodeURIComponent(d.id)}`}>
+                    <Button size="sm" variant="primary">
+                      Open
+                    </Button>
+                  </Link>
+                  <span className="text-xs text-muted">id: {d.id}</span>
                 </div>
-              </div>
-            );
-          })
-        )}
+              </CardContent>
+            </Card>
+          );
+        })}
       </div>
-    </main>
+    </AppShell>
   );
 }

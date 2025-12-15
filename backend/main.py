@@ -29,6 +29,8 @@ from api_models import (
   AuthMeResponse,
   AuthRefreshRequest,
   AuthSessionResponse,
+  DrillCompleteRequest,
+  DrillCompleteResponse,
   DrillSessionListResponse,
   DrillSessionResponse,
   DrillStartRequest,
@@ -51,7 +53,7 @@ from coach_models import SendMessageRequest, SendMessageResponse, StartSessionRe
 from coach_service import send_message, start_session
 from brief_pipeline import run_daily_brief
 from mascot_service import advise as mascot_advise
-from drill_service import get_drill_session_with_feedback, list_drill_sessions, record_vapi_event, start_drill
+from drill_service import complete_drill_session, get_drill_session_with_feedback, list_drill_sessions, record_vapi_event, start_drill
 from lesson_service import get_knowledge_lesson, get_skill_lesson, list_knowledge_lessons, list_skill_lessons
 from progress_service import list_lesson_progress, progress_summary, upsert_lesson_progress
 from learning_path_service import recommend_learning_path
@@ -93,17 +95,32 @@ logger = logging.getLogger("connected")
 
 app = FastAPI(title="Connected AI Service")
 
-web_origin_env = os.getenv("WEB_ORIGIN", "http://localhost:3000")
+web_origin_env_raw = os.getenv("WEB_ORIGIN")
+web_origin_env = (web_origin_env_raw or "http://localhost:3000").strip()
 web_origins = [o.strip() for o in web_origin_env.split(",") if o.strip()]
+
+# If WEB_ORIGIN isn't explicitly set, allow local dev from common LAN ranges.
+# This prevents CORS failures when accessing Next.js via http://<LAN_IP>:3000.
+allow_origin_regex: str | None = None
+if web_origin_env_raw is None:
+  allow_origin_regex = (
+    r"^http://(localhost|127\\.0\\.0\\.1|"
+    r"10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|"
+    r"192\\.168\\.\\d{1,3}\\.\\d{1,3}|"
+    r"172\\.(1[6-9]|2\\d|3[0-1])\\.\\d{1,3}\\.\\d{1,3})"
+    r"(:\\d+)?$"
+  )
 
 allow_credentials = os.getenv("ALLOW_CREDENTIALS", "false").lower() == "true"
 if web_origin_env.strip() == "*":
   web_origins = ["*"]
   allow_credentials = False
+  allow_origin_regex = None
 
 app.add_middleware(
   CORSMiddleware,
   allow_origins=web_origins,
+  allow_origin_regex=allow_origin_regex,
   allow_credentials=allow_credentials,
   allow_methods=["*"] ,
   allow_headers=["*"] ,
@@ -481,7 +498,7 @@ def auth_me(authorization: str | None = Header(default=None)):
 
 @app.get("/news/feed")
 def get_news_feed(
-  limit: int = Query(default=50, ge=10, le=200),
+  limit: int = Query(default=50, ge=1, le=200),
   diversify: bool = Query(default=False),
   max_per_category: int | None = Query(default=None, ge=1, le=50),
 ):
@@ -756,6 +773,23 @@ def list_drills_endpoint(
   user = get_current_user(authorization)
   items = list_drill_sessions(user_access_token=user.access_token, limit=limit, offset=offset)
   return {"items": items, "limit": limit, "offset": offset}
+
+
+@app.post("/drills/{drill_session_id}/complete", response_model=DrillCompleteResponse)
+def complete_drill_endpoint(
+  drill_session_id: str,
+  payload: DrillCompleteRequest,
+  authorization: str | None = Header(default=None),
+):
+  user = get_current_user(authorization)
+  ok = complete_drill_session(
+    user_access_token=user.access_token,
+    drill_session_id=drill_session_id,
+    transcript=payload.transcript,
+  )
+  if not ok:
+    raise HTTPException(status_code=404, detail="Drill session not found")
+  return DrillCompleteResponse(drill_session_id=drill_session_id)
 
 
 @app.post("/mascot/drill/start", response_model=DrillStartResponse)
