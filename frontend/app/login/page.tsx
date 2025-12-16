@@ -4,9 +4,9 @@ import type { ChangeEvent } from "react";
 import { useState } from "react";
 import Link from "next/link";
 
-import { Button } from "../../src/components/ui/Button";
-import { Card, CardContent, CardHeader, CardSubtitle, CardTitle } from "../../src/components/ui/Card";
-import { Input } from "../../src/components/ui/Input";
+import { Button } from "../../components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
+import { Input } from "../../components/ui/input";
 import { login, signup } from "../../src/lib/authClient";
 
 export default function LoginPage() {
@@ -45,48 +45,66 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-6 py-16">
-      <div className="w-full max-w-md">
-        <div className="mb-10">
-          <Link href="/" className="text-sm font-semibold tracking-tight">
+    <main className="min-h-screen bg-gradient-to-br from-bg via-surface to-primary-subtle/20 flex items-center justify-center px-8 py-16">
+      <div className="w-full max-w-lg">
+        <div className="text-center mb-3xl">
+          <Link href="/" className="inline-block text-2xl font-bold tracking-tight text-text hover:text-primary transition-colors mb-lg">
             Connected
           </Link>
+          <p className="text-body-lg text-muted">Welcome back to your learning journey</p>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Sign in</CardTitle>
-            <CardSubtitle>Use email + password.</CardSubtitle>
+        <Card variant="elevated" className="shadow-2xl backdrop-blur-sm">
+          <CardHeader className="text-center">
+            <CardTitle className="text-headline">Sign in</CardTitle>
+            <CardDescription className="text-body">Enter your credentials to continue learning</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4">
-            <label className="grid gap-2 text-sm">
-              <span className="text-muted">Email</span>
-              <Input value={email} onChange={(e: ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)} />
-            </label>
+          <CardContent className="space-y-xl">
+            <div className="space-y-sm">
+              <label className="text-body-sm font-medium text-text-secondary">Email</label>
+              <Input 
+                variant="filled"
+                placeholder="Enter your email"
+                value={email} 
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)} 
+              />
+            </div>
 
-            <label className="grid gap-2 text-sm">
-              <span className="text-muted">Password</span>
+            <div className="space-y-sm">
+              <label className="text-body-sm font-medium text-text-secondary">Password</label>
               <Input
+                variant="filled"
+                placeholder="Enter your password"
                 value={password}
                 type="password"
                 onChange={(e: ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
               />
-            </label>
-
-            <div className="mt-2 grid gap-3 sm:grid-cols-2">
-              <Button variant="primary" onClick={signIn}>
-                Sign in
-              </Button>
-              <Button onClick={signUp}>Create account</Button>
             </div>
 
-            {status ? <div className="text-sm text-muted">{status}</div> : null}
+            <div className="space-y-lg pt-lg">
+              <Button variant="primary" size="lg" className="w-full shadow-lg hover:shadow-xl" onClick={signIn}>
+                Sign in
+              </Button>
+              <Button variant="secondary" size="lg" className="w-full" onClick={signUp}>
+                Create new account
+              </Button>
+            </div>
+
+            {status && (
+              <div className={`rounded-xl p-lg text-center text-body-sm ${
+                status.includes('failed') || status.includes('error') 
+                  ? 'bg-error-subtle text-error border border-error/20' 
+                  : 'bg-success-subtle text-success border border-success/20'
+              }`}>
+                {status}
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        <div className="mt-6 text-sm text-muted">
-          <Link href="/" className="hover:text-text">
-            Back to home
+        <div className="mt-2xl text-center">
+          <Link href="/" className="text-body-sm text-muted hover:text-text transition-colors font-medium">
+            ← Back to home
           </Link>
         </div>
       </div>

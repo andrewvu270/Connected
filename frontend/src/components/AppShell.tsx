@@ -3,6 +3,9 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { PageTransition } from "./PageTransition";
+import { MobileNav } from "../../components/ui/mobile-nav";
+import { ProfileDropdown } from "./ProfileDropdown";
 
 type AppShellProps = {
   title?: string | null;
@@ -18,8 +21,10 @@ function NavLink({ href, label }: { href: string; label: string }) {
     <Link
       href={href}
       className={
-        "inline-flex items-center rounded-xl px-3 py-2 text-sm font-medium transition " +
-        (active ? "bg-card text-text shadow-soft" : "text-muted hover:text-text")
+        "inline-flex items-center rounded-lg px-2 sm:px-3 lg:px-4 py-1.5 sm:py-2 lg:py-2.5 text-xs sm:text-sm font-medium transition-all duration-200 whitespace-nowrap " +
+        (active 
+          ? "bg-primary-subtle text-primary shadow-sm border border-primary-muted/30" 
+          : "text-muted hover:text-text hover:bg-surface-elevated")
       }
     >
       {label}
@@ -28,41 +33,66 @@ function NavLink({ href, label }: { href: string; label: string }) {
 }
 
 export default function AppShell({ title, subtitle, actions, children }: AppShellProps) {
-  return (
-    <div className="min-h-screen bg-bg">
-      <header className="sticky top-0 z-20 border-b border-border bg-bg/80 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4">
-          <div className="flex items-center gap-6">
-            <Link href="/" className="text-sm font-semibold tracking-tight">
-              Connected
-            </Link>
-            <nav className="hidden items-center gap-1 md:flex">
-              <NavLink href="/dashboard" label="Dashboard" />
-              <NavLink href="/practice" label="Practice" />
-              <NavLink href="/feed" label="Feed" />
-              <NavLink href="/brief" label="Brief" />
-              <NavLink href="/learning-path" label="Lessons" />
-              <NavLink href="/mascot" label="Mascot" />
-            </nav>
-          </div>
+  const navLinks = [
+    { href: "/dashboard", label: "Dashboard" },
+    { href: "/practice", label: "Practice" },
+    { href: "/feed", label: "Feed" },
+    { href: "/learning-path", label: "Lessons" },
+  ];
 
-          <div className="flex items-center gap-3">
-            {actions ? <div className="hidden sm:block">{actions}</div> : null}
-            <NavLink href="/profile" label="Profile" />
+  return (
+    <div className="min-h-screen">
+      <header className="sticky top-0 z-20 border-b border-border-subtle bg-surface/95 backdrop-blur-xl shadow-xs">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 sm:gap-4 px-4 sm:px-6 lg:px-8 py-3 sm:py-4 lg:py-5">
+          {/* Logo */}
+          <Link href="/" className="text-base sm:text-lg font-bold tracking-tight text-text hover:text-primary transition-colors flex-shrink-0">
+            Connected
+          </Link>
+
+          {/* Desktop Navigation */}
+          <nav className="hidden lg:flex items-center gap-1 xl:gap-2">
+            <NavLink href="/dashboard" label="Dashboard" />
+            <NavLink href="/practice" label="Practice" />
+            <NavLink href="/feed" label="Feed" />
+            <NavLink href="/learning-path" label="Lessons" />
+          </nav>
+
+          {/* Actions and Profile */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            {actions && (
+              <div className="hidden sm:block">
+                {actions}
+              </div>
+            )}
+            
+            {/* Desktop Profile Dropdown */}
+            <div className="hidden lg:block">
+              <ProfileDropdown />
+            </div>
+            
+            {/* Mobile Navigation */}
+            <div className="lg:hidden">
+              <MobileNav 
+                links={navLinks}
+                actions={actions}
+              />
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl px-6 py-10">
-        {(title || subtitle) ? (
-          <div className="mb-8">
-            {title ? <h1 className="text-2xl font-semibold tracking-tight">{title}</h1> : null}
-            {subtitle ? <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted">{subtitle}</p> : null}
-          </div>
-        ) : null}
+      <PageTransition>
+        <main className="mx-auto w-full max-w-7xl px-8 py-12">
+          {(title || subtitle) ? (
+            <div className="mb-12">
+              {title ? <h1 className="text-headline text-text">{title}</h1> : null}
+              {subtitle ? <p className="mt-3 max-w-3xl text-body-lg text-muted leading-relaxed">{subtitle}</p> : null}
+            </div>
+          ) : null}
 
-        {children}
-      </main>
+          {children}
+        </main>
+      </PageTransition>
     </div>
   );
 }

@@ -110,7 +110,7 @@ export default function PracticeHistoryPage() {
 
                 <div className="mt-4 flex flex-wrap items-center gap-3">
                   <Link href={`/practice?drill=${encodeURIComponent(d.id)}`}>
-                    <Button size="sm" variant="primary">
+                    <Button size="sm" >
                       Open
                     </Button>
                   </Link>

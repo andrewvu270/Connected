@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { gsap } from "gsap";
+import { BookOpen, GraduationCap, ChevronDown, Clock, BarChart, CheckCircle, Circle } from "lucide-react";
 
 import AppShell from "../../src/components/AppShell";
 import { Badge } from "../../src/components/ui/Badge";
 import { Button } from "../../src/components/ui/Button";
-import { Card, CardContent, CardHeader, CardSubtitle, CardTitle } from "../../src/components/ui/Card";
+import { Card, CardContent } from "../../src/components/ui/Card";
 import { fetchAuthed, requireAuthOrRedirect } from "../../src/lib/authClient";
 
 type SkillLessonSummary = {
@@ -27,9 +29,11 @@ type KnowledgeLessonSummary = {
   read_time_minutes?: number | null;
 };
 
-type SkillGroup = {
-  phase: string;
-  domains: { domain: string; lessons: SkillLessonSummary[] }[];
+type ProgressRow = {
+  user_id: string;
+  lesson_type: string;
+  lesson_id: string;
+  status: "started" | "completed";
 };
 
 export default function LearningPathPage() {
@@ -41,6 +45,11 @@ export default function LearningPathPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [skills, setSkills] = useState<SkillLessonSummary[]>([]);
   const [knowledge, setKnowledge] = useState<KnowledgeLessonSummary[]>([]);
+  const [progress, setProgress] = useState<ProgressRow[]>([]);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  const skillCardsRef = useRef<HTMLDivElement>(null);
+  const knowledgeCardsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     requireAuthOrRedirect("/login");
@@ -85,6 +94,15 @@ export default function LearningPathPage() {
 
       setSkills(Array.isArray(skillsRows) ? skillsRows : []);
       setKnowledge(Array.isArray(knowledgeRows) ? knowledgeRows : []);
+
+      // Fetch progress separately and handle errors gracefully
+      try {
+        const progressRows = await fetchAll<ProgressRow>("/progress/lessons");
+        setProgress(Array.isArray(progressRows) ? progressRows : []);
+      } catch (progressError) {
+        console.warn("Failed to load progress data:", progressError);
+        setProgress([]); // Continue without progress data
+      }
     } catch (e: any) {
       setStatus(String(e?.message ?? "Unknown error"));
     } finally {
@@ -95,6 +113,11 @@ export default function LearningPathPage() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Helper function to get lesson progress status
+  const getLessonProgress = useCallback((lessonType: "skill" | "knowledge", lessonId: string) => {
+    return progress.find(p => p.lesson_type === lessonType && p.lesson_id === lessonId);
+  }, [progress]);
 
   async function markLesson(lessonType: "skill" | "knowledge", lessonId: string, statusValue: "started" | "completed") {
     setStatus(null);
@@ -125,29 +148,25 @@ export default function LearningPathPage() {
     }
   }
 
-  const skillGroups = useMemo((): SkillGroup[] => {
+  const skillGroups = useMemo(() => {
     const byPhase: Record<string, SkillLessonSummary[]> = {};
     for (const l of skills) {
       const phase = String(l.phase ?? "Other").trim() || "Other";
       (byPhase[phase] ||= []).push(l);
     }
-
-    const phases = Object.keys(byPhase).sort((a, b) => a.localeCompare(b));
-    return phases.map((phase) => {
-      const phaseLessons = byPhase[phase] || [];
-      const byDomain: Record<string, SkillLessonSummary[]> = {};
-      for (const l of phaseLessons) {
-        const domain = String(l.domain ?? "General").trim() || "General";
-        (byDomain[domain] ||= []).push(l);
-      }
-      const domains = Object.keys(byDomain)
-        .sort((a, b) => a.localeCompare(b))
-        .map((domain) => ({
-          domain,
-          lessons: (byDomain[domain] || []).slice().sort((a, b) => a.title.localeCompare(b.title)),
-        }));
-      return { phase, domains };
-    });
+    return Object.keys(byPhase)
+      .sort((a, b) => a.localeCompare(b))
+      .map((phase) => ({
+        phase,
+        lessons: (byPhase[phase] || []).sort((a, b) => {
+          // First sort by domain, then by title within domain
+          const domainA = String(a.domain ?? "").trim() || "ZZZ"; // Put empty domains at end
+          const domainB = String(b.domain ?? "").trim() || "ZZZ";
+          const domainCompare = domainA.localeCompare(domainB);
+          if (domainCompare !== 0) return domainCompare;
+          return a.title.localeCompare(b.title);
+        })
+      }));
   }, [skills]);
 
   const knowledgeGroups = useMemo(() => {
@@ -160,145 +179,287 @@ export default function LearningPathPage() {
       .sort((a, b) => a.localeCompare(b))
       .map((category) => ({
         category,
-        lessons: (byCat[category] || []).slice().sort((a, b) => a.title.localeCompare(b.title)),
+        lessons: (byCat[category] || []).sort((a, b) => a.title.localeCompare(b.title))
       }));
   }, [knowledge]);
 
+  function toggleGroup(groupId: string, cardsContainer: HTMLElement | null) {
+    const isExpanded = expandedGroups.has(groupId);
+    const newExpanded = new Set(expandedGroups);
+
+    if (isExpanded) {
+      newExpanded.delete(groupId);
+    } else {
+      newExpanded.add(groupId);
+
+      // Animate cards entrance when expanding
+      if (cardsContainer) {
+        setTimeout(() => {
+          const cards = cardsContainer.querySelectorAll('.lesson-card');
+          gsap.from(cards, {
+            opacity: 0,
+            y: 10,
+            duration: 0.4,
+            stagger: 0.06,
+            ease: 'power2.out'
+          });
+        }, 50);
+      }
+    }
+
+    setExpandedGroups(newExpanded);
+
+    // Rotate caret
+    const caret = document.querySelector(`[data-caret="${groupId}"]`);
+    if (caret) {
+      gsap.to(caret, {
+        rotation: newExpanded.has(groupId) ? 180 : 0,
+        duration: 0.25,
+        ease: 'power2.out'
+      });
+    }
+  }
+
   return (
     <AppShell
-      title="Lessons"
-      subtitle="Browse skills by phase and domain, plus knowledge lessons by category."
-      actions={
-        <div className="flex items-center gap-3">
-          <Button onClick={refresh} variant="primary" disabled={loading}>
-            {loading ? "Refreshing…" : "Refresh"}
-          </Button>
-          <Link className="text-sm text-muted hover:text-text" href="/practice">
-            Practice
-          </Link>
-        </div>
-      }
+      title="Learning Path"
+      subtitle="Skill lessons and knowledge by category"
     >
-      {status ? <div className="text-sm text-red-600">{status}</div> : null}
+      {/* Page Actions */}
+      <div className="mb-6 sm:mb-8 flex justify-end">
+        <Button onClick={refresh} variant="secondary" size="sm" disabled={loading}>
+          <Clock className="mr-2 h-4 w-4" />
+          {loading ? "Refreshing..." : "Refresh"}
+        </Button>
+      </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Skill lessons</CardTitle>
-            <CardSubtitle>Expand a phase, then a domain, then pick a lesson.</CardSubtitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? <div className="text-sm text-muted">Loading…</div> : null}
-            {!loading && skills.length === 0 ? <div className="text-sm text-muted">No skill lessons found.</div> : null}
+      {status && <div className="text-body-sm text-warning mb-6">{status}</div>}
 
-            <div className="grid gap-3">
-              {skillGroups.map((phase) => {
-                const phaseCount = phase.domains.reduce((acc, d) => acc + d.lessons.length, 0);
-                return (
-                  <details key={phase.phase} className="rounded-2xl border border-border bg-bg">
-                    <summary className="cursor-pointer select-none px-5 py-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="text-sm font-semibold tracking-tight">{phase.phase}</div>
-                        <div className="text-xs text-muted">{phaseCount} lessons</div>
+      <div className="grid gap-xl lg:grid-cols-2">
+        {/* Skill Lessons */}
+        <div>
+          <div className="mb-lg flex items-center gap-md">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-subtle">
+              <GraduationCap className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <h2 className="text-title">Skill Lessons</h2>
+              <p className="text-body-sm text-muted">{skills.length} lessons</p>
+            </div>
+          </div>
+
+          {loading && <p className="text-body-sm text-muted">Loading lessons...</p>}
+
+          {!loading && skills.length === 0 && (
+            <Card>
+              <CardContent className="p-xl text-center">
+                <p className="text-body-sm text-muted">No skill lessons found.</p>
+              </CardContent>
+            </Card>
+          )}
+
+          <div ref={skillCardsRef} className="space-y-md">
+            {skillGroups.map((group) => {
+              const groupId = `skill-${group.phase}`;
+              const isExpanded = expandedGroups.has(groupId);
+
+              return (
+                <Card key={groupId}>
+                  <CardContent className="p-0">
+                    <button
+                      onClick={() => toggleGroup(groupId, document.getElementById(`cards-${groupId}`))}
+                      className="flex w-full items-center justify-between p-lg text-left transition-colors hover:bg-surface"
+                    >
+                      <div>
+                        <h3 className="text-body font-medium">{group.phase}</h3>
+                        <p className="text-label uppercase text-muted">{group.lessons.length} lessons</p>
                       </div>
-                    </summary>
+                      <ChevronDown
+                        data-caret={groupId}
+                        className="h-5 w-5 text-muted transition-transform"
+                      />
+                    </button>
 
-                    <div className="grid gap-2 px-5 pb-5">
-                      {phase.domains.map((domain) => (
-                        <details key={`${phase.phase}__${domain.domain}`} className="rounded-xl border border-border bg-card">
-                          <summary className="cursor-pointer select-none px-4 py-3">
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                              <div className="text-sm font-medium">{domain.domain}</div>
-                              <div className="text-xs text-muted">{domain.lessons.length}</div>
-                            </div>
-                          </summary>
-
-                          <div className="grid gap-2 px-4 pb-4">
-                            {domain.lessons.map((l) => (
-                              <div key={l.lesson_id} className="rounded-xl border border-border bg-bg p-4">
-                                <div className="flex flex-wrap items-start justify-between gap-3">
-                                  <Link className="text-sm font-semibold tracking-tight hover:underline" href={`/lesson/skill/${encodeURIComponent(l.lesson_id)}`}>
-                                    {l.title}
-                                  </Link>
-                                  <div className="flex flex-wrap gap-2">
-                                    {l.read_time_minutes ? <Badge>{l.read_time_minutes} min</Badge> : null}
-                                    {l.difficulty ? <Badge tone="accent">{l.difficulty}</Badge> : null}
+                    {isExpanded && (
+                      <div id={`cards-${groupId}`} className="space-y-sm border-t border-border p-lg">
+                        {group.lessons.map((lesson) => {
+                          const lessonProgress = getLessonProgress("skill", lesson.lesson_id);
+                          const isCompleted = lessonProgress?.status === "completed";
+                          const isStarted = lessonProgress?.status === "started";
+                          
+                          return (
+                            <div
+                              key={lesson.lesson_id}
+                              className={`lesson-card rounded-xl border p-md transition-all hover:shadow-soft ${
+                                isCompleted 
+                                  ? "border-success bg-success-subtle/20 hover:bg-success-subtle/30" 
+                                  : isStarted
+                                  ? "border-primary bg-primary-subtle/20 hover:bg-primary-subtle/30"
+                                  : "border-border bg-surface hover:bg-bg"
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-md">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <Link
+                                      href={`/lesson/skill/${encodeURIComponent(lesson.lesson_id)}`}
+                                      className="text-body-sm font-medium hover:text-primary"
+                                    >
+                                      {lesson.title}
+                                    </Link>
+                                    {isCompleted && (
+                                      <CheckCircle className="h-4 w-4 text-success flex-shrink-0" />
+                                    )}
+                                    {isStarted && !isCompleted && (
+                                      <Circle className="h-4 w-4 text-primary flex-shrink-0" />
+                                    )}
+                                  </div>
+                                  <div className="mt-sm flex flex-wrap gap-xs">
+                                    {lessonProgress && (
+                                      <Badge tone={isCompleted ? "success" : "primary"} className="text-xs">
+                                        {isCompleted ? "Completed" : "Started"}
+                                      </Badge>
+                                    )}
+                                    {lesson.read_time_minutes && (
+                                      <Badge tone="neutral">
+                                        <Clock className="mr-1 inline-block h-3 w-3" />
+                                        {lesson.read_time_minutes} min
+                                      </Badge>
+                                    )}
+                                    {lesson.difficulty && (
+                                      <Badge tone="accent">
+                                        <BarChart className="mr-1 inline-block h-3 w-3" />
+                                        {lesson.difficulty}
+                                      </Badge>
+                                    )}
+                                    {lesson.domain && (
+                                      <Badge tone="neutral">{lesson.domain}</Badge>
+                                    )}
                                   </div>
                                 </div>
-                                <div className="mt-3 flex flex-wrap gap-3">
-                                  <Link href={`/lesson/skill/${encodeURIComponent(l.lesson_id)}`}>
-                                    <Button size="sm">Open</Button>
-                                  </Link>
-                                  <Button size="sm" onClick={() => markLesson("skill", l.lesson_id, "started")}>
-                                    Mark started
-                                  </Button>
-                                  <Button variant="primary" size="sm" onClick={() => markLesson("skill", l.lesson_id, "completed")}>
-                                    Mark completed
-                                  </Button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Knowledge Lessons */}
+        <div>
+          <div className="mb-lg flex items-center gap-md">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-subtle">
+              <BookOpen className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <h2 className="text-title">Knowledge</h2>
+              <p className="text-body-sm text-muted">{knowledge.length} lessons</p>
+            </div>
+          </div>
+
+          {loading && <p className="text-body-sm text-muted">Loading lessons...</p>}
+
+          {!loading && knowledge.length === 0 && (
+            <Card>
+              <CardContent className="p-xl text-center">
+                <p className="text-body-sm text-muted">No knowledge lessons found.</p>
+              </CardContent>
+            </Card>
+          )}
+
+          <div ref={knowledgeCardsRef} className="space-y-md">
+            {knowledgeGroups.map((group) => {
+              const groupId = `knowledge-${group.category}`;
+              const isExpanded = expandedGroups.has(groupId);
+
+              return (
+                <Card key={groupId}>
+                  <CardContent className="p-0">
+                    <button
+                      onClick={() => toggleGroup(groupId, document.getElementById(`cards-${groupId}`))}
+                      className="flex w-full items-center justify-between p-lg text-left transition-colors hover:bg-surface"
+                    >
+                      <div>
+                        <h3 className="text-body font-medium">{group.category}</h3>
+                        <p className="text-label uppercase text-muted">{group.lessons.length} lessons</p>
+                      </div>
+                      <ChevronDown
+                        data-caret={groupId}
+                        className="h-5 w-5 text-muted transition-transform"
+                      />
+                    </button>
+
+                    {isExpanded && (
+                      <div id={`cards-${groupId}`} className="space-y-sm border-t border-border p-lg">
+                        {group.lessons.map((lesson) => {
+                          const lessonProgress = getLessonProgress("knowledge", lesson.lesson_id);
+                          const isCompleted = lessonProgress?.status === "completed";
+                          const isStarted = lessonProgress?.status === "started";
+                          
+                          return (
+                            <div
+                              key={lesson.lesson_id}
+                              className={`lesson-card rounded-xl border p-md transition-all hover:shadow-soft ${
+                                isCompleted 
+                                  ? "border-success bg-success-subtle/20 hover:bg-success-subtle/30" 
+                                  : isStarted
+                                  ? "border-primary bg-primary-subtle/20 hover:bg-primary-subtle/30"
+                                  : "border-border bg-surface hover:bg-bg"
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-md">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <Link
+                                      href={`/lesson/knowledge/${encodeURIComponent(lesson.lesson_id)}`}
+                                      className="text-body-sm font-medium hover:text-primary"
+                                    >
+                                      {lesson.title}
+                                    </Link>
+                                    {isCompleted && (
+                                      <CheckCircle className="h-4 w-4 text-success flex-shrink-0" />
+                                    )}
+                                    {isStarted && !isCompleted && (
+                                      <Circle className="h-4 w-4 text-primary flex-shrink-0" />
+                                    )}
+                                  </div>
+                                  <div className="mt-sm flex flex-wrap gap-xs">
+                                    {lessonProgress && (
+                                      <Badge tone={isCompleted ? "success" : "primary"} className="text-xs">
+                                        {isCompleted ? "Completed" : "Started"}
+                                      </Badge>
+                                    )}
+                                    {lesson.read_time_minutes && (
+                                      <Badge tone="neutral">
+                                        <Clock className="mr-1 inline-block h-3 w-3" />
+                                        {lesson.read_time_minutes} min
+                                      </Badge>
+                                    )}
+                                    {lesson.difficulty && (
+                                      <Badge tone="accent">
+                                        <BarChart className="mr-1 inline-block h-3 w-3" />
+                                        {lesson.difficulty}
+                                      </Badge>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
-                            ))}
-                          </div>
-                        </details>
-                      ))}
-                    </div>
-                  </details>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Knowledge lessons</CardTitle>
-            <CardSubtitle>Expand a category and pick a lesson.</CardSubtitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? <div className="text-sm text-muted">Loading…</div> : null}
-            {!loading && knowledge.length === 0 ? <div className="text-sm text-muted">No knowledge lessons found.</div> : null}
-
-            <div className="grid gap-3">
-              {knowledgeGroups.map((cat) => (
-                <details key={cat.category} className="rounded-2xl border border-border bg-bg">
-                  <summary className="cursor-pointer select-none px-5 py-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="text-sm font-semibold tracking-tight">{cat.category}</div>
-                      <div className="text-xs text-muted">{cat.lessons.length} lessons</div>
-                    </div>
-                  </summary>
-
-                  <div className="grid gap-2 px-5 pb-5">
-                    {cat.lessons.map((l) => (
-                      <div key={l.lesson_id} className="rounded-xl border border-border bg-card p-4">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <Link className="text-sm font-semibold tracking-tight hover:underline" href={`/lesson/knowledge/${encodeURIComponent(l.lesson_id)}`}>
-                            {l.title}
-                          </Link>
-                          <div className="flex flex-wrap gap-2">
-                            {l.read_time_minutes ? <Badge>{l.read_time_minutes} min</Badge> : null}
-                            {l.difficulty ? <Badge tone="accent">{l.difficulty}</Badge> : null}
-                          </div>
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-3">
-                          <Link href={`/lesson/knowledge/${encodeURIComponent(l.lesson_id)}`}>
-                            <Button size="sm">Open</Button>
-                          </Link>
-                          <Button size="sm" onClick={() => markLesson("knowledge", l.lesson_id, "started")}>
-                            Mark started
-                          </Button>
-                          <Button variant="primary" size="sm" onClick={() => markLesson("knowledge", l.lesson_id, "completed")}>
-                            Mark completed
-                          </Button>
-                        </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    ))}
-                  </div>
-                </details>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </AppShell>
   );

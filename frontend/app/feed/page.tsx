@@ -1,11 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { gsap } from "gsap";
+import { ExternalLink, Sparkles, TrendingUp } from "lucide-react";
 
 import AppShell from "../../src/components/AppShell";
 import { Badge } from "../../src/components/ui/Badge";
 import { Button } from "../../src/components/ui/Button";
 import { Card, CardContent } from "../../src/components/ui/Card";
+import { CategoryLottie, getCategoryGradient } from "../../src/components/CategoryLottie";
 import { fetchAuthed, requireAuthOrRedirect } from "../../src/lib/authClient";
 
 type FeedRow = {
@@ -19,106 +23,210 @@ type FeedRow = {
     talk_track?: string | null;
     smart_question?: string | null;
     sources?: { url?: string | null }[] | null;
+    image_url?: string | null;
   } | null;
 };
 
+function getCategoryColor(category: string | null): "primary" | "accent" | "neutral" {
+  const cat = category?.toLowerCase() || "tech";
+  // Map categories to badge tones
+  if (["tech", "business", "science"].includes(cat)) return "primary";
+  if (["politics", "culture"].includes(cat)) return "accent";
+  return "neutral";
+}
+
+
+
 export default function FeedPage() {
-  const aiUrl = useMemo(() => process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8000", []);
+  const aiUrl = useMemo(() => process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8001", []);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<FeedRow[]>([]);
+  const cardsRef = useRef<HTMLDivElement>(null);
+
+  const refresh = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await requireAuthOrRedirect("/login");
+
+      const res = await fetchAuthed(`${aiUrl}/news/feed?limit=50&diversify=true`, { cache: "no-store" });
+      if (!res.ok) {
+        setError(`Error: ${res.status}`);
+        return;
+      }
+
+      const json = (await res.json()) as { data?: FeedRow[] };
+      setData(Array.isArray(json.data) ? json.data : []);
+    } catch (e: any) {
+      setError(String(e?.message ?? e ?? "Unknown error"));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        await requireAuthOrRedirect("/login");
-
-        const res = await fetchAuthed(`${aiUrl}/news/feed?limit=50&diversify=true`, { cache: "no-store" });
-        if (!res.ok) {
-          setError(`Error: ${res.status}`);
-          return;
-        }
-
-        const json = (await res.json()) as { data?: FeedRow[] };
-        if (cancelled) return;
-        setData(Array.isArray(json.data) ? json.data : []);
-      } catch (e: any) {
-        if (cancelled) return;
-        setError(String(e?.message ?? e ?? "Unknown error"));
-      } finally {
-        if (cancelled) return;
-        setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    refresh();
   }, [aiUrl]);
 
+  // Animate cards on data load
+  useEffect(() => {
+    if (!loading && data.length > 0 && cardsRef.current) {
+      const cards = cardsRef.current.children;
+      gsap.from(cards, {
+        opacity: 0,
+        y: 20,
+        duration: 0.5,
+        stagger: 0.08,
+        ease: "power2.out",
+      });
+    }
+  }, [loading, data.length]);
+
+  // Empty state
+  if (!loading && !error && data.length === 0) {
+    return (
+      <AppShell title="News Feed" subtitle="Stay current with curated stories">
+        <div className="mx-auto mt-4xl max-w-2xl text-center">
+          <div className="mb-lg flex h-16 w-16 mx-auto items-center justify-center rounded-2xl bg-primary-subtle">
+            <Sparkles className="h-8 w-8 text-primary" />
+          </div>
+          <h3 className="mb-sm text-title text-text">No stories yet</h3>
+          <p className="text-body text-muted max-w-md mx-auto">
+            We're curating high-signal stories across tech, business, and culture. Check back soon.
+          </p>
+        </div>
+      </AppShell>
+    );
+  }
+
   return (
-    <AppShell title="Feed" subtitle="Rolling updates (latest 50). Diversified across categories.">
-      {loading ? <div className="text-sm text-muted">Loading…</div> : null}
-      {error ? <div className="text-sm text-red-600">{error}</div> : null}
-
-      <div className="mt-6 grid gap-4 md:grid-cols-2">
-        {data.map((row) => {
-          const card = row.card || {};
-          const sourceUrl = Array.isArray(card.sources) && card.sources[0]?.url ? card.sources[0]?.url : null;
-          const why = Array.isArray(card.why_it_matters) ? card.why_it_matters : [];
-
-          return (
-            <Card key={row.id} className="overflow-hidden">
-              <CardContent className="p-6">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge>{row.category ?? ""}</Badge>
-                    </div>
-                    <div className="mt-3 text-base font-semibold tracking-tight">
-                      {card.title ?? "Untitled"}
-                    </div>
-                  </div>
-                  {sourceUrl ? (
-                    <a href={sourceUrl} target="_blank" rel="noreferrer">
-                      <Button size="sm">Source</Button>
-                    </a>
-                  ) : null}
-                </div>
-
-                {card.what_happened ? (
-                  <div className="mt-3 text-sm leading-relaxed text-muted">
-                    {card.what_happened}
-                  </div>
-                ) : null}
-
-                {why.length ? (
-                  <ul className="mt-4 grid gap-2 pl-5 text-sm text-muted">
-                    {why.slice(0, 3).map((b, i) => (
-                      <li key={i}>{b}</li>
-                    ))}
-                  </ul>
-                ) : null}
-
-                {card.talk_track ? (
-                  <div className="mt-4 rounded-xl border border-border bg-bg p-4 text-sm">
-                    <div className="text-xs font-medium text-muted">Talk track</div>
-                    <div className="mt-1 leading-relaxed text-text">{card.talk_track}</div>
-                  </div>
-                ) : null}
-
-                {card.smart_question ? (
-                  <div className="mt-3 rounded-xl border border-border bg-bg p-4 text-sm">
-                    <div className="text-xs font-medium text-muted">Smart question</div>
-                    <div className="mt-1 leading-relaxed text-text">{card.smart_question}</div>
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
-          );
-        })}
+    <AppShell title="News Feed" subtitle="Curated stories with conversation starters">
+      {/* Page Actions */}
+      <div className="mb-6 sm:mb-8 flex justify-end">
+        <Button variant="secondary" size="sm" onClick={refresh} disabled={loading}>
+          <TrendingUp className="mr-2 h-4 w-4" />
+          {loading ? "Refreshing..." : "Refresh Feed"}
+        </Button>
       </div>
+
+      {/* Loading State */}
+      {loading && (
+        <div className="mx-auto mt-xl max-w-4xl text-center">
+          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-border border-t-primary"></div>
+          <p className="mt-lg text-body text-muted">Loading stories...</p>
+        </div>
+      )}
+
+      {/* Error State */}
+      {error && (
+        <div className="rounded-2xl border border-error/20 bg-error-subtle p-xl mb-2xl">
+          <p className="text-body text-error">{error}</p>
+        </div>
+      )}
+
+      {/* Feed Grid */}
+      {!loading && data.length > 0 && (
+        <div ref={cardsRef} className="grid gap-lg sm:gap-2xl grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-w-7xl mx-auto px-2 sm:px-0">
+          {data.map((row) => {
+            const card = row.card;
+            const categoryColor = getCategoryColor(row.category);
+
+            return (
+              <div key={row.id} className="group">
+                <Card variant="elevated" className="overflow-hidden h-full flex flex-col hover:shadow-lg transition-shadow cursor-pointer">
+                  <Link href={`/feed/${row.id}`} className="flex flex-col h-full">
+                    {/* Glassmorphism Image */}
+                    <div className={`relative h-40 sm:h-48 w-full overflow-hidden bg-gradient-to-br ${getCategoryGradient(row.category)}`}>
+                      {/* Glassmorphism overlay */}
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-black/20 backdrop-blur-sm"></div>
+                      
+                      {/* Main icon */}
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <CategoryLottie category={row.category} size="xl" />
+                      </div>
+                      
+                      {/* Glassmorphism decorative elements */}
+                      <div className="absolute top-4 right-4 w-8 h-8 bg-white/20 backdrop-blur-sm rounded-full border border-white/30"></div>
+                      <div className="absolute bottom-4 left-4 w-6 h-6 bg-white/15 backdrop-blur-sm rounded-full border border-white/20"></div>
+                      <div className="absolute top-1/2 left-6 w-4 h-4 bg-white/10 backdrop-blur-sm rounded-full border border-white/20"></div>
+                      
+                      {/* Additional glassmorphism elements */}
+                      <div className="absolute top-6 left-1/3 w-3 h-3 bg-white/10 backdrop-blur-sm rounded-full border border-white/20"></div>
+                      <div className="absolute bottom-8 right-1/4 w-5 h-5 bg-white/15 backdrop-blur-sm rounded-full border border-white/25"></div>
+                    </div>
+
+                    <CardContent className="p-lg sm:p-2xl flex-1 flex flex-col min-w-0">
+                      {/* Category Badge */}
+                      {row.category && (
+                        <Badge tone={categoryColor} className="mb-lg w-fit flex-shrink-0 text-xs">
+                          {row.category}
+                        </Badge>
+                      )}
+
+                      {/* Title */}
+                      <h3 className="text-base sm:text-title text-text mb-lg leading-snug line-clamp-3 group-hover:text-primary transition-colors break-words">
+                        {card?.title || "Untitled"}
+                      </h3>
+
+                      {/* Summary */}
+                      {card?.what_happened && (
+                        <p className="text-xs sm:text-body-sm text-muted leading-relaxed mb-lg line-clamp-2 flex-1 break-words">
+                          {String(card.what_happened).slice(0, 150)}...
+                        </p>
+                      )}
+
+                      {/* Talk Track Preview */}
+                      {card?.talk_track && (
+                        <div className="mb-lg p-lg rounded-xl bg-surface-elevated border border-border-subtle min-w-0">
+                          <p className="text-xs sm:text-body-sm text-text-secondary italic break-words">
+                            💬 "{String(card.talk_track).slice(0, 80)}..."
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Smart Question */}
+                      {card?.smart_question && (
+                        <div className="mb-lg p-lg rounded-xl bg-primary-subtle border border-primary-muted/20 min-w-0">
+                          <p className="text-xs sm:text-body-sm text-primary font-medium break-words">
+                            ❓ {String(card.smart_question).slice(0, 80)}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Read More Indicator */}
+                      <div className="mt-auto pt-lg border-t border-border-subtle">
+                        <div className="text-xs sm:text-body-sm text-primary font-medium">
+                          Click to read full story →
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Link>
+
+                  {/* External Source Button - Outside the main link */}
+                  {card?.sources?.[0]?.url && (
+                    <CardContent className="p-lg sm:p-2xl pt-0">
+                      <a 
+                        href={card.sources[0].url} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="block"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Button variant="secondary" size="sm" className="w-full group/btn">
+                          Read Original Source
+                          <ExternalLink className="ml-2 h-3 w-3 transition-transform group-hover/btn:translate-x-0.5" />
+                        </Button>
+                      </a>
+                    </CardContent>
+                  )}
+                </Card>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </AppShell>
   );
 }
