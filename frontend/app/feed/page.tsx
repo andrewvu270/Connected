@@ -43,7 +43,10 @@ export default function FeedPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<FeedRow[]>([]);
+  const [visibleCount, setVisibleCount] = useState(10);
   const cardsRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+  const prevVisibleCountRef = useRef(0);
 
   const refresh = async () => {
     setLoading(true);
@@ -59,6 +62,8 @@ export default function FeedPage() {
 
       const json = (await res.json()) as { data?: FeedRow[] };
       setData(Array.isArray(json.data) ? json.data : []);
+      setVisibleCount(10);
+      prevVisibleCountRef.current = 0;
     } catch (e: any) {
       setError(String(e?.message ?? e ?? "Unknown error"));
     } finally {
@@ -73,16 +78,44 @@ export default function FeedPage() {
   // Animate cards on data load
   useEffect(() => {
     if (!loading && data.length > 0 && cardsRef.current) {
-      const cards = cardsRef.current.children;
-      gsap.from(cards, {
+      const children = Array.from(cardsRef.current.children);
+      const startIdx = Math.max(0, Math.min(prevVisibleCountRef.current, children.length));
+      const newCards = children.slice(startIdx);
+      if (newCards.length === 0) {
+        prevVisibleCountRef.current = visibleCount;
+        return;
+      }
+      gsap.from(newCards, {
         opacity: 0,
         y: 20,
         duration: 0.5,
         stagger: 0.08,
         ease: "power2.out",
       });
+      prevVisibleCountRef.current = visibleCount;
     }
-  }, [loading, data.length]);
+  }, [loading, data.length, visibleCount]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (!loadMoreRef.current) return;
+    if (visibleCount >= data.length) return;
+
+    const el = loadMoreRef.current;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        const first = entries[0];
+        if (!first?.isIntersecting) return;
+        setVisibleCount((v) => Math.min(v + 10, data.length));
+      },
+      { root: null, rootMargin: "600px", threshold: 0 },
+    );
+
+    obs.observe(el);
+    return () => {
+      obs.disconnect();
+    };
+  }, [loading, data.length, visibleCount]);
 
   // Empty state
   if (!loading && !error && data.length === 0) {
@@ -128,8 +161,9 @@ export default function FeedPage() {
 
       {/* Feed Grid */}
       {!loading && data.length > 0 && (
-        <div ref={cardsRef} className="grid gap-lg sm:gap-2xl grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-w-7xl mx-auto px-2 sm:px-0">
-          {data.map((row) => {
+        <>
+          <div ref={cardsRef} className="grid gap-lg sm:gap-2xl grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-w-7xl mx-auto px-2 sm:px-0">
+            {data.slice(0, visibleCount).map((row) => {
             const card = row.card;
             const categoryColor = getCategoryColor(row.category);
 
@@ -224,8 +258,22 @@ export default function FeedPage() {
                 </Card>
               </div>
             );
-          })}
-        </div>
+            })}
+          </div>
+
+          {visibleCount < data.length && (
+            <div className="mt-8 flex flex-col items-center gap-3">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setVisibleCount((v) => Math.min(v + 10, data.length))}
+              >
+                Load more
+              </Button>
+              <div ref={loadMoreRef} className="h-1 w-full" />
+            </div>
+          )}
+        </>
       )}
     </AppShell>
   );

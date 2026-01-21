@@ -192,6 +192,25 @@ def start_drill(
       },
     }
 
+    from coach_service import start_session
+
+    session_state = {"drill_prompt": prompt, "drill_session_id": drill_session_id}
+    coach_session_id = start_session(
+      user_id=user_id,
+      user_access_token=user_access_token,
+      lesson_id=(lesson_ids[0] if lesson_ids else None),
+      mode="roleplay",
+      initial_state=session_state,
+      initial_coach_message=str(prompt.get("opener") or "Hey — nice to meet you."),
+    )
+
+    admin = get_supabase_admin_client()
+    admin.table("drill_sessions").update(
+      {"coach_session_id": coach_session_id, "updated_at": _now_iso()}
+    ).eq("id", drill_session_id).execute()
+
+    out["coach_session_id"] = coach_session_id
+
   return out
 
 

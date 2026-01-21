@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from supabase_client import get_supabase_admin_client
 
 
 def _utc_today_date() -> str:
-  return datetime.now(timezone.utc).date().isoformat()
+  tz_name = (os.getenv("APP_TIMEZONE") or "America/New_York").strip() or "America/New_York"
+  tz = ZoneInfo(tz_name)
+  return datetime.now(tz).date().isoformat()
 
 
 def _dedupe_by_lesson_id(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:

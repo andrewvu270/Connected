@@ -30,7 +30,7 @@ type DrillListResponse = {
 
 export default function PracticeHistoryPage() {
   const aiUrl = useMemo(() => {
-    return process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8000";
+    return process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8001";
   }, []);
 
   const [status, setStatus] = useState<string | null>(null);

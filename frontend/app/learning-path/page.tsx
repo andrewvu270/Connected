@@ -38,7 +38,7 @@ type ProgressRow = {
 
 export default function LearningPathPage() {
   const aiUrl = useMemo(() => {
-    return process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8000";
+    return process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8001";
   }, []);
 
   const [loading, setLoading] = useState(false);
@@ -316,7 +316,7 @@ export default function LearningPathPage() {
                                   </div>
                                   <div className="mt-sm flex flex-wrap gap-xs">
                                     {lessonProgress && (
-                                      <Badge tone={isCompleted ? "success" : "primary"} className="text-xs">
+                                      <Badge tone="primary" className="text-xs">
                                         {isCompleted ? "Completed" : "Started"}
                                       </Badge>
                                     )}
@@ -430,7 +430,7 @@ export default function LearningPathPage() {
                                   </div>
                                   <div className="mt-sm flex flex-wrap gap-xs">
                                     {lessonProgress && (
-                                      <Badge tone={isCompleted ? "success" : "primary"} className="text-xs">
+                                      <Badge tone="primary" className="text-xs">
                                         {isCompleted ? "Completed" : "Started"}
                                       </Badge>
                                     )}

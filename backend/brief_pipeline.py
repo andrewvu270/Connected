@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from zoneinfo import ZoneInfo
+
 import httpx
 import openai
 from openai import OpenAI
@@ -22,10 +24,13 @@ class BriefResult:
   stored: bool
   audience: str
   brief_date: str
+  edition: str
 
 
 def _utc_today_date() -> str:
-  return datetime.now(timezone.utc).date().isoformat()
+  tz_name = (os.getenv("APP_TIMEZONE") or "America/New_York").strip() or "America/New_York"
+  tz = ZoneInfo(tz_name)
+  return datetime.now(tz).date().isoformat()
 
 
 def _now_iso() -> str:
@@ -48,6 +53,17 @@ def _env_topics(name: str) -> list[str] | None:
     return None
   parts = [p.strip() for p in raw.split(",")]
   return [p for p in parts if p]
+
+
+def _normalize_edition(edition: str | None) -> str:
+  e = (edition or "morning").strip().lower()
+  if e not in {"morning", "midday", "evening"}:
+    return "morning"
+  return e
+
+
+def _edition_order() -> list[str]:
+  return ["morning", "midday", "evening"]
 
 
 def _llm_primary_provider() -> str:
@@ -294,16 +310,109 @@ def _topic_payload(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _maybe_llm_overview(brief: dict[str, Any]) -> dict[str, Any]:
   system = (
-    "You write a morning/evening brief for young professionals. "
-    "Be concise, neutral, and avoid hype. Do not invent facts."
+    "Role\n"
+    "You are an expert global news analyst and editor producing a concise, high-signal daily briefing for an informed audience.\n\n"
+    "Objective\n"
+    "Generate a daily global brief summarizing the most important developments from the last 24 hours, prioritizing relevance, accuracy, and clarity over volume.\n\n"
+    "Required Coverage Areas (all must be included):\n"
+    "Global Events & World Affairs\n"
+    "Economics & Public Policy\n"
+    "Finance & Markets\n"
+    "Technology & AI\n"
+    "Science & Research\n"
+    "Health & Fitness\n"
+    "Society & Culture\n"
+    "Sports\n\n"
+    "Output Constraints\n"
+    "Exactly 3 paragraphs total.\n"
+    "Each paragraph: 3–5 sentences.\n"
+    "Total read time: ~1 minute.\n"
+    "Tone: Neutral, professional, non-sensational.\n"
+    "No headlines, no bullet points, no emojis.\n"
+    "No speculation or opinions.\n"
+    "State uncertainty clearly if facts are incomplete.\n\n"
+    "Paragraph Structure (strict)\n"
+    "Paragraph 1: Global events, geopolitics, major conflicts, diplomacy, and societal impacts.\n"
+    "Paragraph 2: Economics, central banks, government policy, finance, markets, and business trends.\n"
+    "Paragraph 3: Technology, AI, science, health & fitness, sports, and cultural or research developments.\n\n"
+    "Content Guidelines\n"
+    "Focus on what changed, why it matters, and who is affected.\n"
+    "Prioritize developments with regional or global impact.\n"
+    "Avoid repeating prior-day news unless there is a meaningful update.\n"
+    "Group related topics naturally to maintain flow.\n"
+    "Avoid sensational language and unnecessary adjectives.\n\n"
+    "Formatting Rules\n"
+    "Plain text only. No citations unless explicitly requested. No meta commentary.\n\n"
+    "Important: Use only facts clearly supported by the provided items. Do not invent facts.\n"
+    "If a required coverage area is not supported by the provided items, explicitly say it is unclear based on available reporting.\n"
+    "In the JSON you return, the value for key 'overview' must be EXACTLY 3 paragraphs separated by a single blank line.\n\n"
+    "Additional requirement for multi-edition briefs: if previous editions are provided, avoid repeating facts already covered unless there is a meaningful update."
   )
+
+  topics = brief.get("topics") or []
+  topic_items: list[dict[str, Any]] = []
+  if isinstance(topics, list):
+    for sec in topics:
+      if not isinstance(sec, dict):
+        continue
+      t = sec.get("topic")
+      items = sec.get("items") or []
+      if not isinstance(items, list):
+        continue
+      for it in items[:3]:
+        if not isinstance(it, dict):
+          continue
+        src_url = None
+        srcs = it.get("sources")
+        if isinstance(srcs, list) and srcs and isinstance(srcs[0], dict):
+          src_url = srcs[0].get("url")
+        topic_items.append(
+          {
+            "topic": t,
+            "title": it.get("title"),
+            "what_happened": it.get("what_happened"),
+            "url": src_url,
+          }
+        )
+
+  if not topic_items:
+    raw_items = brief.get("items", [])
+    if isinstance(raw_items, list):
+      for it in raw_items[:15]:
+        if not isinstance(it, dict):
+          continue
+        src_url = None
+        srcs = it.get("sources")
+        if isinstance(srcs, list) and srcs and isinstance(srcs[0], dict):
+          src_url = srcs[0].get("url")
+        topic_items.append(
+          {
+            "topic": it.get("category"),
+            "title": it.get("title"),
+            "what_happened": it.get("what_happened"),
+            "url": src_url,
+          }
+        )
 
   user = {
     "brief_date": brief.get("brief_date"),
-    "items": brief.get("items", [])[:15],
+    "edition": brief.get("edition"),
+    "previous_overviews": brief.get("previous_overviews") or [],
+    "lookback_hours": _env_int("DAILY_BRIEF_LOOKBACK_HOURS", 24),
+    "items": topic_items[:30],
+    "required_coverage_areas": [
+      "Global Events & World Affairs",
+      "Economics & Public Policy",
+      "Finance & Markets",
+      "Technology & AI",
+      "Science & Research",
+      "Health & Fitness",
+      "Society & Culture",
+      "Sports",
+    ],
     "required_json": {
-      "overview": "string, 3-5 sentences max",
-      "tags": "array of up to 8 strings"
+      "overview": "string (plain text only): exactly 3 paragraphs, each 3-5 sentences; paragraphs separated by a blank line",
+      "tags": "array of up to 8 strings",
     },
   }
 
@@ -375,11 +484,12 @@ def _maybe_llm_topic_brief(*, topic: str, items: list[dict[str, Any]]) -> dict[s
   }
 
 
-def run_daily_brief(audience: str = "global") -> BriefResult:
+def run_daily_brief(audience: str = "global", edition: str = "morning") -> BriefResult:
   supabase = get_supabase_admin_client()
   brief_date = _utc_today_date()
+  edition = _normalize_edition(edition)
 
-  logger.info("daily_brief_start", extra={"audience": audience, "brief_date": brief_date})
+  logger.info("daily_brief_start", extra={"audience": audience, "brief_date": brief_date, "edition": edition})
 
   existing = (
     supabase.table("news_daily_briefs")
@@ -390,17 +500,37 @@ def run_daily_brief(audience: str = "global") -> BriefResult:
     .execute()
   )
   force = os.getenv("DAILY_BRIEF_FORCE_REGEN") == "1"
-  if not force and existing.data:
+  brief_container: dict[str, Any] | None = None
+  if existing.data:
     row0 = existing.data[0] if isinstance(existing.data, list) and existing.data else None
     brief_existing = (row0 or {}).get("brief") if isinstance(row0, dict) else None
     if isinstance(brief_existing, dict):
-      logger.info("daily_brief_skip_existing", extra={"audience": audience, "brief_date": brief_date})
-      return BriefResult(
-        items_selected=len(brief_existing.get("items") or []),
-        stored=True,
-        audience=audience,
-        brief_date=brief_date,
-      )
+      brief_container = brief_existing
+
+  # Backward compatible container:
+  # - legacy: {overview, items, topics}
+  # - new: {editions: {morning|midday|evening: {overview, ...}}, latest_edition}
+  if brief_container is None:
+    brief_container = {"brief_date": brief_date, "created_at": _now_iso(), "editions": {}, "latest_edition": None}
+  if not isinstance(brief_container.get("editions"), dict):
+    brief_container = {
+      "brief_date": brief_date,
+      "created_at": brief_container.get("created_at") or _now_iso(),
+      "editions": {"morning": brief_container},
+      "latest_edition": "morning",
+    }
+
+  editions: dict[str, Any] = brief_container.get("editions") or {}
+  if not force and isinstance(editions.get(edition), dict):
+    existing_edition = editions.get(edition) or {}
+    logger.info("daily_brief_skip_existing", extra={"audience": audience, "brief_date": brief_date, "edition": edition})
+    return BriefResult(
+      items_selected=len((existing_edition.get("items") or []) if isinstance(existing_edition, dict) else []),
+      stored=True,
+      audience=audience,
+      brief_date=brief_date,
+      edition=edition,
+    )
 
   topics_default = [
     "culture",
@@ -417,6 +547,10 @@ def run_daily_brief(audience: str = "global") -> BriefResult:
   topics = _env_topics("DAILY_BRIEF_TOPICS") or topics_default
   hours = _env_int("DAILY_BRIEF_LOOKBACK_HOURS", 24)
   per_topic_limit = _env_int("DAILY_BRIEF_ITEMS_PER_TOPIC", 10)
+  if edition == "midday":
+    per_topic_limit = _env_int("DAILY_BRIEF_ITEMS_PER_TOPIC_MIDDAY", per_topic_limit)
+  if edition == "evening":
+    per_topic_limit = _env_int("DAILY_BRIEF_ITEMS_PER_TOPIC_EVENING", per_topic_limit)
   max_topics = _env_int("DAILY_BRIEF_MAX_TOPICS", len(topics))
 
   all_items: list[dict[str, Any]] = []
@@ -438,12 +572,23 @@ def run_daily_brief(audience: str = "global") -> BriefResult:
       all_items.append(it)
 
   all_items = all_items[:25]
+  previous_overviews: list[str] = []
+  order = _edition_order()
+  for e in order:
+    if e == edition:
+      break
+    prev = editions.get(e)
+    if isinstance(prev, dict) and isinstance(prev.get("overview"), str) and prev.get("overview").strip():
+      previous_overviews.append(prev.get("overview").strip())
+
   brief = {
     "brief_date": brief_date,
+    "edition": edition,
     "generated_at": _now_iso(),
     "overview": None,
     "topics": topic_sections,
     "items": all_items,
+    "previous_overviews": previous_overviews,
   }
   brief = _maybe_llm_overview(brief)
 
@@ -452,15 +597,21 @@ def run_daily_brief(audience: str = "global") -> BriefResult:
     extra={
       "audience": audience,
       "brief_date": brief_date,
+      "edition": edition,
       "topics": len(topic_sections),
       "items_selected": len(all_items),
     },
   )
 
+  editions[edition] = brief
+  brief_container["editions"] = editions
+  brief_container["latest_edition"] = edition
+  brief_container["updated_at"] = _now_iso()
+
   upsert_payload = {
     "brief_date": brief_date,
     "audience": audience,
-    "brief": brief,
+    "brief": brief_container,
     "created_at": _now_iso(),
   }
 
@@ -474,4 +625,5 @@ def run_daily_brief(audience: str = "global") -> BriefResult:
     stored=True,
     audience=audience,
     brief_date=brief_date,
+    edition=edition,
   )

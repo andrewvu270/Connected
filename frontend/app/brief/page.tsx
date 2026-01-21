@@ -3,37 +3,38 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { gsap } from "gsap";
-import { Newspaper, MessageSquare } from "lucide-react";
+import { Newspaper } from "lucide-react";
 
 import AppShell from "../../src/components/AppShell";
-import { Badge } from "../../src/components/ui/Badge";
 import { Card, CardContent } from "../../src/components/ui/Card";
 import { fetchAuthed, requireAuthOrRedirect } from "../../src/lib/authClient";
-
-type BriefItem = {
-  category?: string | null;
-  title?: string | null;
-  what_happened?: string | null;
-  why_it_matters?: string[] | null;
-  talk_track?: string | null;
-};
 
 type Brief = {
   audience?: string | null;
   date?: string | null;
   overview?: string | null;
-  items?: BriefItem[] | null;
+};
+
+type BriefResponse = {
+  audience?: string;
+  brief_date?: string;
+  edition?: string | null;
+  available_editions?: string[];
+  latest_edition?: string | null;
+  brief?: Brief | null;
 };
 
 export default function BriefPage() {
-  const aiUrl = useMemo(() => process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8000", []);
+  const aiUrl = useMemo(() => process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8001", []);
 
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [brief, setBrief] = useState<Brief | null>(null);
+  const [edition, setEdition] = useState<"morning" | "midday" | "evening">("morning");
+  const [availableEditions, setAvailableEditions] = useState<string[]>([]);
+  const [latestEdition, setLatestEdition] = useState<string | null>(null);
 
   const overviewRef = useRef<HTMLDivElement>(null);
-  const cardsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     requireAuthOrRedirect("/login");
@@ -46,7 +47,7 @@ export default function BriefPage() {
       setStatus(null);
       setLoading(true);
       try {
-        const res = await fetchAuthed(`${aiUrl}/news/brief?audience=global`, {
+        const res = await fetchAuthed(`${aiUrl}/news/brief?audience=global&edition=${encodeURIComponent(edition)}`, {
           method: "GET",
           headers: {}
         });
@@ -61,8 +62,11 @@ export default function BriefPage() {
           return;
         }
 
-        const json = (await res.json()) as { brief?: Brief };
-        if (!cancelled) setBrief(json?.brief ?? null);
+        const json = (await res.json()) as BriefResponse;
+        if (cancelled) return;
+        setBrief(json?.brief ?? null);
+        setAvailableEditions(Array.isArray(json?.available_editions) ? json.available_editions : []);
+        setLatestEdition(typeof json?.latest_edition === "string" ? json.latest_edition : null);
       } catch (e: any) {
         setStatus(e?.message ?? "Unknown error");
       } finally {
@@ -74,7 +78,7 @@ export default function BriefPage() {
     return () => {
       cancelled = true;
     };
-  }, [aiUrl]);
+  }, [aiUrl, edition]);
 
   // Animate overview and cards on load
   useEffect(() => {
@@ -88,23 +92,8 @@ export default function BriefPage() {
           ease: "power2.out"
         });
       }
-
-      // Cards stagger
-      if (cardsRef.current) {
-        const cards = cardsRef.current.children;
-        gsap.from(cards, {
-          opacity: 0,
-          y: 15,
-          duration: 0.6,
-          stagger: 0.08,
-          delay: 0.2,
-          ease: "power2.out"
-        });
-      }
     }
   }, [loading, brief]);
-
-  const items = Array.isArray(brief?.items) ? brief!.items! : [];
 
   // Empty state
   if (!loading && !brief) {
@@ -138,6 +127,30 @@ export default function BriefPage() {
 
       {!loading && brief && (
         <div className="mx-auto max-w-feed">
+          <div className="mt-xl flex flex-wrap items-center gap-3">
+            <div className="text-body-sm text-muted">Edition:</div>
+            {(["morning", "midday", "evening"] as const).map((e) => (
+              <button
+                key={e}
+                onClick={() => setEdition(e)}
+                className={
+                  "rounded-lg px-3 py-1.5 text-xs font-medium border transition-colors " +
+                  (edition === e
+                    ? "bg-primary-subtle text-primary border-primary-muted/30"
+                    : "bg-surface text-muted border-border-subtle hover:bg-surface-elevated")
+                }
+              >
+                {e}
+              </button>
+            ))}
+            {latestEdition ? (
+              <div className="text-xs text-muted">Latest: {latestEdition}</div>
+            ) : null}
+            {availableEditions.length ? (
+              <div className="text-xs text-muted">Available: {availableEditions.join(", ")}</div>
+            ) : null}
+          </div>
+
           {/* Overview */}
           {brief.overview && (
             <div ref={overviewRef}>
@@ -147,64 +160,11 @@ export default function BriefPage() {
                     <Newspaper className="h-5 w-5 text-primary" />
                   </div>
                   <h2 className="mb-sm text-title">Overview</h2>
-                  <p className="text-body text-muted leading-relaxed">{brief.overview}</p>
+                  <p className="text-body text-muted leading-relaxed whitespace-pre-line">{brief.overview}</p>
                 </CardContent>
               </Card>
             </div>
           )}
-
-          {/* Brief Items */}
-          <div ref={cardsRef} className="mt-xl space-y-lg">
-            {items.map((item: BriefItem, idx: number) => (
-              <Card key={idx} className="transition-all hover:shadow-refined">
-                <CardContent className="p-xl">
-                  {/* Category Badge */}
-                  {item.category && (
-                    <Badge tone="neutral">{item.category}</Badge>
-                  )}
-
-                  {/* Title */}
-                  <h3 className="mt-md text-title leading-snug">
-                    {item.title ?? "Untitled"}
-                  </h3>
-
-                  {/* What Happened */}
-                  {item.what_happened && (
-                    <p className="mt-md text-body text-muted leading-relaxed">
-                      {item.what_happened}
-                    </p>
-                  )}
-
-                  {/* Why It Matters */}
-                  {Array.isArray(item.why_it_matters) && item.why_it_matters.length > 0 && (
-                    <div className="mt-lg">
-                      <div className="mb-sm text-label uppercase text-muted">
-                        Why it matters
-                      </div>
-                      <ul className="space-y-sm pl-5 text-body-sm text-muted list-disc">
-                        {item.why_it_matters.map((point, i) => (
-                          <li key={i} className="leading-relaxed">{point}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Talk Track - Highlighted */}
-                  {item.talk_track && (
-                    <div className="mt-lg rounded-xl border border-border bg-primary-subtle/30 p-lg shadow-sm">
-                      <div className="mb-sm flex items-center gap-2 text-label uppercase text-primary">
-                        <MessageSquare className="h-3 w-3" />
-                        Talk track
-                      </div>
-                      <p className="text-body-sm leading-relaxed text-text">
-                        "{item.talk_track}"
-                      </p>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
         </div>
       )}
     </AppShell>

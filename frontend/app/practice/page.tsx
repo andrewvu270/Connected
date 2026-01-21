@@ -1,16 +1,11 @@
 "use client";
 
-import type { ChangeEvent, KeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 import Vapi from "@vapi-ai/web";
-import { Send, Phone, PhoneOff, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
 
 import AppShell from "../../src/components/AppShell";
 import { Button } from "../../src/components/ui/Button";
 import { Card, CardContent } from "../../src/components/ui/Card";
-import { Input } from "../../src/components/ui/Input";
 import MascotCanvas from "../../src/components/MascotCanvas";
 import { fetchAuthed, requireAuthOrRedirect } from "../../src/lib/authClient";
 
@@ -40,33 +35,64 @@ type DrillSession = {
   };
 };
 
-type ChatMessage = {
-  role: "user" | "coach";
-  content: string;
-};
-
 export default function PracticePage() {
-  const searchParams = useSearchParams();
   const aiUrl = useMemo(() => process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8001", []);
   const vapiPublicKey = useMemo(() => process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY ?? "", []);
   const vapiAssistantId = useMemo(() => process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID ?? "", []);
 
   const vapiRef = useRef<any>(null);
+  const activeDrillIdRef = useRef<string | null>(null);
+  const autoStartedRef = useRef(false);
 
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [drillSessionId, setDrillSessionId] = useState<string | null>(null);
   const [drill, setDrill] = useState<DrillSession | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
   const [status, setStatus] = useState<string | null>(null);
 
+  const [coachComments, setCoachComments] = useState<string | null>(null);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+
   const [voiceActive, setVoiceActive] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
-  const [mode, setMode] = useState<"text" | "voice">("text");
 
-  const [context, setContext] = useState("");
+  const coachCommentsStatus = useMemo(() => {
+    if (!status) return null;
+    const s = status.toLowerCase();
+    if (s.includes("coach comments") || s.includes("generating coach comments")) return status;
+    return null;
+  }, [status]);
 
-  const lastCoachMessage = messages.find(m => m.role === "coach")?.content || "";
+  const topStatus = useMemo(() => {
+    if (!status) return null;
+    return coachCommentsStatus ? null : status;
+  }, [status, coachCommentsStatus]);
+
+  const coachSections = useMemo(() => {
+    if (!coachComments) return null;
+    const cleaned = coachComments.replaceAll("**", "");
+    const lines = cleaned.split(/\r?\n/).map(l => l.trim());
+    const sections: Array<{ title: string; items: string[]; paragraphs: string[] }> = [];
+    let current: { title: string; items: string[]; paragraphs: string[] } | null = null;
+
+    for (const line of lines) {
+      if (!line) continue;
+      const isBullet = line.startsWith("- ");
+      const isHeading = !isBullet && line.endsWith(":") && line.length <= 80;
+      if (isHeading) {
+        current = { title: line.slice(0, -1), items: [], paragraphs: [] };
+        sections.push(current);
+        continue;
+      }
+      if (!current) {
+        current = { title: "Coach comments", items: [], paragraphs: [] };
+        sections.push(current);
+      }
+      if (isBullet) {
+        current.items.push(line.slice(2).trim());
+      } else {
+        current.paragraphs.push(line);
+      }
+    }
+
+    return sections;
+  }, [coachComments]);
 
   // Initialize Vapi
   useEffect(() => {
@@ -79,32 +105,86 @@ export default function PracticePage() {
       const vapi = new Vapi(vapiPublicKey);
       vapiRef.current = vapi;
 
+      const fetchCoachCommentsAfterCall = async () => {
+        const id = activeDrillIdRef.current;
+        if (!id) return;
+
+        setFeedbackLoading(true);
+        setCoachComments(null);
+        setStatus("Generating coach comments...");
+
+        let lastStatus: string | null = null;
+        let lastEventsCount: number | null = null;
+        let foundFeedback = false;
+
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < 45000) {
+          try {
+            const res = await fetchAuthed(`${aiUrl}/drills/${id}`, { method: "GET" });
+
+            if (res.ok) {
+              const row = (await res.json()) as any;
+              if (row && typeof row === "object") {
+                setDrill(row);
+                lastStatus = typeof row.status === "string" ? row.status : null;
+                lastEventsCount = Array.isArray(row.events) ? row.events.length : null;
+                if (typeof row.feedback === "string" && row.feedback.trim()) {
+                  foundFeedback = true;
+                  setCoachComments(row.feedback.trim());
+                  setStatus(null);
+                  break;
+                }
+              }
+            }
+
+          } catch {
+            // ignore and retry
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+
+        setFeedbackLoading(false);
+
+        if (!foundFeedback) {
+          const statusStr = lastStatus ? `Drill status: ${lastStatus}.` : "";
+          const eventsStr = typeof lastEventsCount === "number" ? `Events: ${lastEventsCount}.` : "";
+          const completed = (lastStatus || "").toLowerCase() === "completed";
+          setStatus(
+            completed
+              ? `Coach comments are still generating. ${statusStr} ${eventsStr} Try again in a few seconds.`
+              : `Coach comments are not ready yet. ${statusStr} ${eventsStr} This usually means the backend did not receive the Vapi end-of-call report (webhook). Check VAPI_WEBHOOK_URL and VAPI_WEBHOOK_SECRET, then end the call again.`,
+          );
+        }
+      };
+
       vapi.on("call-start", () => {
         setVoiceActive(true);
-        setMode("voice");
+        setStatus(null);
       });
 
       vapi.on("call-end", () => {
         setVoiceActive(false);
-      });
-
-      vapi.on("message", (msg: any) => {
-        if (msg.type === "transcript" && msg.transcript) {
-          const role = msg.role === "user" ? "user" : "coach";
-          setMessages(prev => [...prev, { role, content: msg.transcript }]);
-        }
+        void fetchCoachCommentsAfterCall();
       });
 
       vapi.on("error", (error: any) => {
+        let errorJson: string | null = null;
+        try {
+          errorJson = JSON.stringify(error, null, 2);
+        } catch {
+          errorJson = null;
+        }
         console.error("Vapi error event:", {
           type: error?.type,
           stage: error?.stage,
-          message: error?.error?.message,
+          message: error?.error?.message ?? error?.message,
           details: error?.error,
           fullError: error,
+          errorJson,
         });
-        setStatus(`Voice error: ${error?.message || "Unknown error"}`);
-        setMode("text");
+        const statusMessage = error?.error?.message ?? error?.message ?? "Unknown error";
+        setStatus(`Voice error: ${statusMessage}`);
       });
 
       return () => {
@@ -113,7 +193,14 @@ export default function PracticePage() {
     } catch (e) {
       console.error("Failed to initialize Vapi:", e);
     }
-  }, [vapiPublicKey, vapiAssistantId]);
+  }, [vapiPublicKey, vapiAssistantId, aiUrl]);
+
+  useEffect(() => {
+    if (drill) return;
+    if (autoStartedRef.current) return;
+    autoStartedRef.current = true;
+    void startDrill();
+  }, [drill]);
 
   async function startDrill() {
     setStatus(null);
@@ -129,7 +216,7 @@ export default function PracticePage() {
           goal: "practice_conversation",
           person: "coach",
           time_budget: "10min",
-          constraints: context.trim(),
+          constraints: "",
           lesson_ids: [],
         }),
       });
@@ -141,50 +228,23 @@ export default function PracticePage() {
 
       const data = (await res.json()) as any;
       const drillId = data.id || data.drill_session_id;
+      activeDrillIdRef.current = drillId;
       console.log("Drill started:", {
         drillId,
         provider: data.provider,
         hasVapiConfig: !!data.vapi,
         vapiConfig: data.vapi,
-        context: context.trim(),
       });
-      
+
       const normalizedDrill: DrillSession = {
         ...data,
         id: drillId,
       };
-      
+
       setDrill(normalizedDrill);
-      setDrillSessionId(drillId);
-      setMessages([]);
-    } catch (e: any) {
-      setStatus(String(e?.message ?? e ?? "Unknown error"));
-    }
-  }
-
-  async function sendMessage() {
-    const text = input.trim();
-    if (!text || !sessionId) return;
-
-    setInput("");
-    setMessages(prev => [...prev, { role: "user", content: text }]);
-
-    try {
-      const res = await fetchAuthed(`${aiUrl}/coach/sessions/${sessionId}/message`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: text }),
-      });
-
-      if (!res.ok) {
-        setStatus(`Failed to send message: ${res.status}`);
-        return;
-      }
-
-      const data = await res.json();
-      if (data.coach_message) {
-        setMessages(prev => [...prev, { role: "coach", content: data.coach_message }]);
-      }
+      setCoachComments(null);
+      setFeedbackLoading(false);
+      setStatus(null);
     } catch (e: any) {
       setStatus(String(e?.message ?? e ?? "Unknown error"));
     }
@@ -206,26 +266,43 @@ export default function PracticePage() {
       });
 
       const systemPrompt = drill.vapi?.assistant?.system_prompt || drill.prompt?.system_prompt || "";
-      
-      const callConfig: any = {
-        assistantId: vapiAssistantId,
+      const contextualPrompt = systemPrompt && systemPrompt.trim()
+        ? systemPrompt
+        : "You are Sage, a friendly conversation coach. Help the user practice conversation skills.";
+
+      const assistantOverrides: any = {
+        clientMessages: ["transcript", "status-update", "assistant.started"],
+        serverMessages: ["transcript", "status-update", "end-of-call-report", "assistant.started"],
       };
 
-      if (systemPrompt && systemPrompt.trim()) {
-        const contextualPrompt = `${systemPrompt}\n\nUser Context: ${context.trim()}`;
-        callConfig.assistantOverrides = {
-          systemPrompt: contextualPrompt,
-        };
-      } else if (context.trim()) {
-        callConfig.assistantOverrides = {
-          systemPrompt: `You are Sage, a friendly conversation coach. Help the user practice conversation skills based on this context: ${context.trim()}`,
-        };
+      if (drill.vapi?.webhook_url) {
+        assistantOverrides.server = { url: drill.vapi.webhook_url };
       }
 
-      console.log("Vapi call config:", callConfig);
-      
-      const startPromise = vapiRef.current.start(callConfig);
+      if (drill.vapi?.metadata) {
+        assistantOverrides.metadata = drill.vapi.metadata;
+      } else if (drill.id) {
+        assistantOverrides.metadata = { drill_session_id: drill.id };
+      }
+
+      console.log("Vapi call config:", {
+        assistantId: vapiAssistantId,
+        assistantOverrides,
+      });
+
+      const startPromise = vapiRef.current.start(vapiAssistantId, assistantOverrides);
       await startPromise;
+
+      if (contextualPrompt && contextualPrompt.trim()) {
+        vapiRef.current.send({
+          type: "add-message",
+          message: {
+            role: "system",
+            content: contextualPrompt,
+          },
+          triggerResponseEnabled: false,
+        });
+      }
     } catch (e: any) {
       console.error("Vapi call error caught:", {
         message: e?.message,
@@ -241,7 +318,6 @@ export default function PracticePage() {
       });
       const errorMsg = e?.error?.message ?? e?.message ?? String(e) ?? "Failed to start call";
       setStatus(`Voice call error: ${errorMsg}. Try text mode instead.`);
-      setMode("text");
     }
   }
 
@@ -254,7 +330,7 @@ export default function PracticePage() {
   return (
     <AppShell 
       title="Practice with Sage" 
-      subtitle="Provide context for your conversation practice and start talking with your AI coach"
+      subtitle="Start talking with your AI coach"
     >
       {/* Combined Practice Screen - SaaS Style */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -268,54 +344,24 @@ export default function PracticePage() {
 
           {/* Right: Chat Interface */}
           <div className="space-y-4 sm:space-y-6 order-1 lg:order-2">
-            {/* Context Input - Hidden when drill is active */}
             {!drill && (
               <Card variant="elevated" className="border-0 shadow-lg bg-gradient-to-br from-surface to-surface-elevated">
                 <CardContent className="p-4 sm:p-6 pt-8 sm:pt-10">
-                  <div className="space-y-4 sm:space-y-5">
-                    <label className="text-sm sm:text-base font-semibold text-text block">
-                      What would you like to practice?
-                    </label>
-
-                    <textarea
-                      value={context}
-                      onChange={(e) => setContext(e.target.value)}
-                      placeholder="Describe your conversation scenario: networking event, job interview, difficult conversation, etc."
-                      className="w-full h-28 sm:h-32 rounded-xl border border-border-subtle bg-surface px-3 sm:px-4 py-3 text-sm sm:text-base text-text placeholder-muted resize-none focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all duration-200"
-                      maxLength={500}
-                    />
-                    
-                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 sm:gap-0">
-                      <p className="text-xs sm:text-sm text-muted">
-                        {context.trim() ? "Sage will tailor the practice to your scenario" : "Optional: Skip to start an open conversation"}
-                      </p>
-                      <span className="text-xs text-muted font-mono self-end sm:self-auto">
-                        {context.length}/500
-                      </span>
-                    </div>
-
-                    <div className="space-y-3 sm:space-y-4">
-                      {status && (
-                        <div className="rounded-xl border border-error/20 bg-error-subtle/50 p-4 sm:p-5 pt-5 sm:pt-6">
-                          <p className="text-sm text-error font-medium">{status}</p>
-                        </div>
-                      )}
-
-                      <Button 
-                        variant="primary" 
-                        size="md" 
-                        onClick={startDrill} 
-                        className="w-full py-3 sm:py-4 text-sm sm:text-base font-semibold shadow-lg hover:shadow-xl transition-all duration-200"
-                      >
-                        Start Practice
-                      </Button>
-                      
-                      {!context.trim() && (
-                        <p className="text-xs sm:text-sm text-center text-muted bg-surface-elevated rounded-lg p-4 pt-5 border border-border-subtle">
-                          💡 You can explain your scenario during the conversation with Sage
-                        </p>
-                      )}
-                    </div>
+                  <div className="space-y-3 sm:space-y-4">
+                    <p className="text-sm text-muted">Preparing your practice session…</p>
+                    {topStatus && (
+                      <div className="rounded-xl border border-error/20 bg-error-subtle/50 p-4 sm:p-5 pt-5 sm:pt-6">
+                        <p className="text-sm text-error font-medium">{topStatus}</p>
+                      </div>
+                    )}
+                    <Button
+                      variant="secondary"
+                      size="md"
+                      onClick={startDrill}
+                      className="w-full py-3 sm:py-4 text-sm sm:text-base font-semibold"
+                    >
+                      Retry
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -332,129 +378,97 @@ export default function PracticePage() {
                       <span className="text-sm font-medium text-success">Active</span>
                     </div>
                   </div>
-                  
-                  {/* Mode Selector */}
-                  <div className="flex gap-1 sm:gap-2 p-1 bg-surface-elevated rounded-xl border border-border-subtle">
-                    <Button
-                      variant={mode === "text" ? "primary" : "ghost"}
-                      size="sm"
-                      onClick={() => setMode("text")}
-                      className="flex-1 rounded-lg text-xs sm:text-sm py-2 sm:py-2.5"
-                    >
-                      Text Chat
-                    </Button>
-                    <Button
-                      variant={mode === "voice" ? "primary" : "ghost"}
-                      size="sm"
-                      onClick={() => setMode("voice")}
-                      className="flex-1 rounded-lg text-xs sm:text-sm py-2 sm:py-2.5"
-                      disabled={!vapiPublicKey || !vapiAssistantId}
-                      title={!vapiPublicKey || !vapiAssistantId ? "Voice calling not configured" : ""}
-                    >
-                      Voice Call
-                    </Button>
-                  </div>
                 </div>
 
-                {/* Chat Messages */}
+                {/* Status */}
+                {topStatus && (
+                  <div className="rounded-xl border border-error/20 bg-error-subtle/50 p-4 sm:p-5">
+                    <p className="text-sm text-error font-medium">{topStatus}</p>
+                  </div>
+                )}
+                
+
+                {/* Coach Comments (after call) */}
                 <Card variant="elevated" className="h-80 sm:h-96 lg:h-[500px] border-0 shadow-xl bg-gradient-to-b from-surface to-surface-elevated">
                   <CardContent className="p-3 sm:p-4 lg:p-6 h-full flex flex-col pt-6 sm:pt-8 lg:pt-10">
                     <div className="flex-1 overflow-y-auto space-y-3 sm:space-y-4 pr-1 sm:pr-2">
-                      {messages.length === 0 ? (
+                      {coachSections ? (
+                        <div className="space-y-4">
+                          {coachSections.map((sec, idx) => (
+                            <div key={idx} className="space-y-2">
+                              <p className="text-sm font-semibold text-text">{sec.title}</p>
+                              {sec.paragraphs.length > 0 && (
+                                <div className="space-y-2">
+                                  {sec.paragraphs.map((p, pidx) => (
+                                    <p key={pidx} className="text-sm leading-relaxed text-text">{p}</p>
+                                  ))}
+                                </div>
+                              )}
+                              {sec.items.length > 0 && (
+                                <div className="rounded-2xl bg-surface-elevated text-text border border-border-subtle shadow-sm p-4">
+                                  <ul className="space-y-2">
+                                    {sec.items.map((item, iidx) => (
+                                      <li key={iidx} className="text-sm leading-relaxed">- {item}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
                         <div className="flex items-center justify-center h-full">
                           <div className="text-center space-y-3">
                             <div className="w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-br from-primary-subtle to-primary-muted rounded-full flex items-center justify-center mx-auto">
-                              <span className="text-primary text-lg sm:text-xl">💬</span>
+                              <span className="text-primary text-lg sm:text-xl">🎧</span>
                             </div>
                             <p className="text-xs sm:text-sm text-muted px-4">
-                              {mode === "voice" ? "Click 'Start Call' to begin speaking with Sage" : "Type a message to start your conversation with Sage"}
+                              {voiceActive
+                                ? "Call in progress. Speak naturally — coach comments will appear after you end the call."
+                                : (coachCommentsStatus
+                                  ? coachCommentsStatus
+                                  : (feedbackLoading
+                                    ? "Generating coach comments…"
+                                    : "Start a voice call. Coach comments will appear here after the call ends."))}
                             </p>
                           </div>
                         </div>
-                      ) : (
-                        messages.map((msg, idx) => (
-                          <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                            <div className={`max-w-[85%] sm:max-w-[80%] ${msg.role === "user" ? "order-2" : "order-1"}`}>
-                              <div
-                                className={`rounded-2xl px-3 sm:px-4 py-2.5 sm:py-3 break-words ${
-                                  msg.role === "user"
-                                    ? "bg-gradient-to-r from-primary to-primary-hover text-white shadow-lg"
-                                    : "bg-surface-elevated text-text border border-border-subtle shadow-sm"
-                                }`}
-                              >
-                                <p className="text-xs sm:text-sm leading-relaxed break-words">{msg.content}</p>
-                              </div>
-                              <p className={`text-xs text-muted mt-1 ${msg.role === "user" ? "text-right" : "text-left"}`}>
-                                {msg.role === "user" ? "You" : "Sage"}
-                              </p>
-                            </div>
-                          </div>
-                        ))
                       )}
                     </div>
                   </CardContent>
                 </Card>
 
                 {/* Input/Controls */}
-                {mode === "text" ? (
-                  <div className="space-y-4 sm:space-y-5">
-                    <div className="flex gap-2 sm:gap-3">
-                      <Input
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        onKeyPress={(e) => e.key === "Enter" && sendMessage()}
-                        placeholder="Type your message to Sage..."
-                        className="flex-1 rounded-xl border-border-subtle focus:border-primary/50 focus:ring-primary/20 text-sm sm:text-base py-2.5 sm:py-3"
-                      />
-                      <Button 
-                        variant="primary" 
-                        size="md" 
-                        onClick={sendMessage}
-                        className="px-4 sm:px-6 rounded-xl shadow-lg hover:shadow-xl text-sm sm:text-base"
-                        disabled={!input.trim()}
-                      >
-                        Send
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-4 sm:space-y-5">
-                    {voiceActive ? (
-                      <Button
-                        variant="secondary"
-                        size="lg"
-                        onClick={stopVoiceCall}
-                        className="w-full py-3 sm:py-4 rounded-xl border-error/20 hover:bg-error-subtle/20 text-sm sm:text-base"
-                      >
-                        <div className="flex items-center justify-center gap-2 sm:gap-3">
-                          <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 bg-error rounded-full animate-pulse"></div>
-                          <span>End Call</span>
-                        </div>
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="primary"
-                        size="lg"
-                        onClick={startVoiceCall}
-                        className="w-full py-3 sm:py-4 rounded-xl shadow-lg hover:shadow-xl text-sm sm:text-base"
-                      >
-                        <div className="flex items-center justify-center gap-2 sm:gap-3">
-                          <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 bg-white rounded-full"></div>
-                          <span>Start Voice Call</span>
-                        </div>
-                      </Button>
-                    )}
-                  </div>
-                )}
+                <div className="space-y-4 sm:space-y-5">
+                  {voiceActive ? (
+                    <Button
+                      variant="secondary"
+                      size="md"
+                      onClick={stopVoiceCall}
+                      className="w-full py-3 sm:py-4 rounded-xl border-error/20 hover:bg-error-subtle/20 text-sm sm:text-base"
+                    >
+                      <div className="flex items-center justify-center gap-2 sm:gap-3">
+                        <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 bg-error rounded-full animate-pulse"></div>
+                        <span>End Call</span>
+                      </div>
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="primary"
+                      size="md"
+                      onClick={startVoiceCall}
+                      className="w-full py-3 sm:py-4 rounded-xl shadow-lg hover:shadow-xl text-sm sm:text-base"
+                    >
+                      <div className="flex items-center justify-center gap-2 sm:gap-3">
+                        <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 bg-white rounded-full"></div>
+                        <span>Start Voice Call</span>
+                      </div>
+                    </Button>
+                  )}
+                </div>
 
                 {/* View History Link */}
-                <div className="pt-2 sm:pt-3">
-                  <Link href="/practice/history">
-                    <Button variant="secondary" size="md" className="w-full rounded-xl text-sm sm:text-base py-2.5 sm:py-3">
-                      View Practice History
-                    </Button>
-                  </Link>
-                </div>
+                <div className="pt-2 sm:pt-3" />
               </>
             )}
           </div>

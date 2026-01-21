@@ -3,9 +3,11 @@ import os
 import time
 import uuid
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, time as dt_time, timezone
 from pathlib import Path
 from typing import Any
+
+from zoneinfo import ZoneInfo
 
 from dotenv import dotenv_values, load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Query, Request
@@ -72,6 +74,11 @@ if not (os.getenv("ADMIN_API_KEY") or "").strip():
       os.environ["ADMIN_API_KEY"] = v
   except Exception:
     pass
+
+
+def _app_tz() -> ZoneInfo:
+  tz_name = (os.getenv("APP_TIMEZONE") or "America/New_York").strip() or "America/New_York"
+  return ZoneInfo(tz_name)
 
 _request_id_ctx: ContextVar[str | None] = ContextVar("request_id", default=None)
 
@@ -311,22 +318,27 @@ def run_news_job(x_admin_key: str | None = Header(default=None)):
 
 
 @app.post("/jobs/brief/run")
-def run_brief_job(audience: str = "global", x_admin_key: str | None = Header(default=None)):
+def run_brief_job(
+  audience: str = "global",
+  edition: str = "morning",
+  x_admin_key: str | None = Header(default=None),
+):
   _require_admin(x_admin_key)
-  logger.info("brief_job_start", extra={"audience": audience})
+  logger.info("brief_job_start", extra={"audience": audience, "edition": edition})
 
   if brief_job:
-    out = brief_job.invoke({"audience": audience})
+    out = brief_job.invoke({"audience": audience, "edition": edition})
     logger.info("brief_job_done", extra={"result": out.get("result") if isinstance(out, dict) else None})
     return out
 
   try:
-    res = run_daily_brief(audience=audience)
+    res = run_daily_brief(audience=audience, edition=edition)
     out = {
       "mode": "direct",
       "result": {
         "audience": res.audience,
         "brief_date": res.brief_date,
+        "edition": res.edition,
         "items_selected": res.items_selected,
         "stored": res.stored,
       },
@@ -338,15 +350,16 @@ def run_brief_job(audience: str = "global", x_admin_key: str | None = Header(def
 
 
 @app.post("/jobs/brief/run_global")
-def run_brief_global(x_admin_key: str | None = Header(default=None)):
+def run_brief_global(edition: str = "morning", x_admin_key: str | None = Header(default=None)):
   _require_admin(x_admin_key)
-  logger.info("brief_global_start")
-  res = run_daily_brief(audience="global")
+  logger.info("brief_global_start", extra={"edition": edition})
+  res = run_daily_brief(audience="global", edition=edition)
   logger.info(
     "brief_global_done",
     extra={
       "audience": res.audience,
       "brief_date": res.brief_date,
+      "edition": res.edition,
       "items_selected": res.items_selected,
       "stored": res.stored,
     },
@@ -354,8 +367,42 @@ def run_brief_global(x_admin_key: str | None = Header(default=None)):
   return {
     "audience": res.audience,
     "brief_date": res.brief_date,
+    "edition": res.edition,
     "items_selected": res.items_selected,
     "stored": res.stored,
+  }
+
+
+@app.post("/jobs/daily/cleanup")
+def cleanup_daily(x_admin_key: str | None = Header(default=None)):
+  _require_admin(x_admin_key)
+  supabase = get_supabase_admin_client()
+  tz = _app_tz()
+  today_date = datetime.now(tz).date()
+  today = today_date.isoformat()
+  cutoff_dt = datetime.combine(today_date, dt_time(0, 0), tzinfo=tz).astimezone(timezone.utc)
+  cutoff_ts = cutoff_dt.isoformat()
+
+  deleted_briefs = 0
+  deleted_cards = 0
+
+  try:
+    briefs_resp = supabase.table("news_daily_briefs").delete().lt("brief_date", today).execute()
+    deleted_briefs = len(briefs_resp.data or [])
+  except Exception as e:
+    raise HTTPException(status_code=500, detail=f"Failed to cleanup briefs: {e}")
+
+  try:
+    cards_resp = supabase.table("news_feed_cards").delete().lt("updated_at", cutoff_ts).execute()
+    deleted_cards = len(cards_resp.data or [])
+  except Exception as e:
+    raise HTTPException(status_code=500, detail=f"Failed to cleanup feed cards: {e}")
+
+  return {
+    "ok": True,
+    "today": today,
+    "cutoff_ts": cutoff_ts,
+    "deleted": {"news_daily_briefs": deleted_briefs, "news_feed_cards": deleted_cards},
   }
 
 
@@ -557,10 +604,11 @@ def get_news_feed(
 def get_news_brief(
   audience: str = Query(default="global"),
   brief_date: str | None = Query(default=None),
+  edition: str | None = Query(default=None),
 ):
   supabase = get_supabase_admin_client()
   if not brief_date:
-    brief_date = datetime.now(timezone.utc).date().isoformat()
+    brief_date = datetime.now(_app_tz()).date().isoformat()
   res = (
     supabase.table("news_daily_briefs")
     .select("brief")
@@ -572,8 +620,36 @@ def get_news_brief(
   if getattr(res, "error", None):
     raise HTTPException(status_code=500, detail=str(res.error))
   row0 = res.data[0] if isinstance(res.data, list) and res.data else None
-  brief = (row0 or {}).get("brief") if isinstance(row0, dict) else None
-  return {"audience": audience, "brief_date": brief_date, "brief": brief}
+  container = (row0 or {}).get("brief") if isinstance(row0, dict) else None
+  if not isinstance(container, dict):
+    return {"audience": audience, "brief_date": brief_date, "edition": None, "brief": None}
+
+  # Backward compatible: either container has editions, or it is already an edition-like brief.
+  editions = container.get("editions") if isinstance(container.get("editions"), dict) else None
+  latest = container.get("latest_edition") if isinstance(container.get("latest_edition"), str) else None
+  available: list[str] = []
+
+  if isinstance(editions, dict):
+    available = [k for k in ["morning", "midday", "evening"] if k in editions]
+    selected = (edition or latest or "morning").strip().lower()
+    brief = editions.get(selected)
+    return {
+      "audience": audience,
+      "brief_date": brief_date,
+      "edition": selected,
+      "available_editions": available,
+      "latest_edition": latest,
+      "brief": brief if isinstance(brief, dict) else None,
+    }
+
+  return {
+    "audience": audience,
+    "brief_date": brief_date,
+    "edition": edition or "morning",
+    "available_editions": ["morning"],
+    "latest_edition": "morning",
+    "brief": container,
+  }
 
 
 @app.post("/coach/sessions/start", response_model=StartSessionResponse)

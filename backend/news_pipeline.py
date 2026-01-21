@@ -229,12 +229,25 @@ def _first_sentence(s: str | None) -> str | None:
   return (parts[0] or "").strip() if parts else s2
 
 
+def _truncate_words(s: str, max_words: int) -> str:
+  parts = [p for p in (s or "").strip().split() if p]
+  if len(parts) <= max_words:
+    return " ".join(parts)
+  return " ".join(parts[:max_words]).rstrip() + "…"
+
+
 def _build_fallback_card(category: str, title: str, url: str, summary: str | None = None) -> dict[str, Any]:
-  what = _first_sentence(summary) or title
-  why: list[str] = []
   clean_summary = _clean_text(summary)
-  if clean_summary and clean_summary != what:
-    more = clean_summary.replace(what, "", 1).strip(" -:;,.\n\t")
+  if clean_summary:
+    what = _truncate_words(clean_summary, 150)
+  else:
+    what = title
+  why: list[str] = []
+  if clean_summary:
+    first_sentence = _first_sentence(clean_summary)
+    more = ""
+    if first_sentence:
+      more = clean_summary.replace(first_sentence, "", 1).strip(" -:;,\.\n\t")
     if more:
       extra_sentences = re.split(r"(?<=[.!?])\s+", more)
       for p in extra_sentences:
@@ -320,7 +333,7 @@ def _maybe_build_llm_card(
     "You are a news brief assistant for young professionals and networkers. "
     "Create a compact, credible card. Never invent facts. "
     "Do not include numbers unless explicitly present in the provided summary/title. "
-    "Always keep it short."
+    "Write clearly and avoid hype."
   )
 
   user = {
@@ -331,7 +344,7 @@ def _maybe_build_llm_card(
     "required_json": {
       "category": "string",
       "title": "string",
-      "what_happened": "string (1 sentence)",
+      "what_happened": "string (one paragraph, max 150 words)",
       "why_it_matters": "array of 2 short bullets max",
       "talk_track": "string (1 sentence user can say)",
       "smart_question": "string (1 question)",
@@ -417,7 +430,7 @@ def run_news_pipeline() -> PipelineResult:
   logger.info("news_pipeline_start")
 
   max_entries_per_source = _env_int("NEWS_MAX_ENTRIES_PER_SOURCE", 5)
-  max_entries_per_category = _env_int("NEWS_MAX_ENTRIES_PER_CATEGORY", 5)
+  max_entries_per_category = _env_int("NEWS_MAX_ENTRIES_PER_CATEGORY", 10)
   _max_total_raw = (os.getenv("NEWS_MAX_TOTAL_ENTRIES") or "").strip()
   max_total_entries: int | None = None
   if _max_total_raw:

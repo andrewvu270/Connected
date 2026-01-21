@@ -13,7 +13,7 @@ const ACCESS_TOKEN_KEY = "connected_access_token";
 const REFRESH_TOKEN_KEY = "connected_refresh_token";
 
 function apiBase() {
-  return process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8000";
+  return process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8001";
 }
 
 function hasWindow() {

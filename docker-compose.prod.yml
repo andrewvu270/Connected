@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: connected-backend-prod
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GNEWS_API_KEY=${GNEWS_API_KEY}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_PROJECT_ID=${SUPABASE_PROJECT_ID}
+      - ADMIN_API_KEY=${ADMIN_API_KEY}
+      - WEB_ORIGIN=${WEB_ORIGIN}
+      - VAPI_WEBHOOK_URL=${VAPI_WEBHOOK_URL}
+      - VAPI_WEBHOOK_SECRET=${VAPI_WEBHOOK_SECRET}
+      - VAPI_PRIVATE_KEY=${VAPI_PRIVATE_KEY}
+      - DAILY_BRIEF_PRIMARY_PROVIDER=${DAILY_BRIEF_PRIMARY_PROVIDER:-anthropic}
+      - DAILY_BRIEF_FALLBACK_PROVIDER=${DAILY_BRIEF_FALLBACK_PROVIDER:-openai}
+      - DAILY_BRIEF_ANTHROPIC_MODEL=${DAILY_BRIEF_ANTHROPIC_MODEL:-claude-3-5-sonnet-20241022}
+      - DAILY_BRIEF_LLM_MODEL=${DAILY_BRIEF_LLM_MODEL:-gpt-4o-mini}
+      - DRILL_FEEDBACK_ANTHROPIC_MODEL=${DRILL_FEEDBACK_ANTHROPIC_MODEL:-claude-3-5-sonnet-20241022}
+      - DRILL_FEEDBACK_OPENAI_MODEL=${DRILL_FEEDBACK_OPENAI_MODEL:-gpt-4o-mini}
+      - NEWS_LOG_SOURCES=${NEWS_LOG_SOURCES:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-WARNING}
+    volumes:
+      - backend-logs:/app/logs
+    restart: always
+    networks:
+      - connected-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  nginx:
+    image: nginx:alpine
+    container_name: connected-nginx-prod
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - nginx-cache:/var/cache/nginx
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: always
+    networks:
+      - connected-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # Log aggregation (optional)
+  fluentd:
+    image: fluent/fluentd:v1.16-debian-1
+    container_name: connected-logs
+    volumes:
+      - ./fluentd/fluent.conf:/fluentd/etc/fluent.conf:ro
+      - backend-logs:/app/logs:ro
+    networks:
+      - connected-network
+    restart: unless-stopped
+
+networks:
+  connected-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  backend-logs:
+    driver: local
+  nginx-cache:
+    driver: local

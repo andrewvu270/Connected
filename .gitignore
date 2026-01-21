@@ -2,13 +2,10 @@ node_modules/
 .next/
 .env
 .env.local
-.env.example
 .venv/
 __pycache__/
 *.pyc
 .DS_Store
-
-.md
 
  # Python
  .pytest_cache/
