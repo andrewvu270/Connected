@@ -1,88 +1,88 @@
-name: Schedule backend jobs
+# name: Schedule backend jobs
 
-on:
-  workflow_dispatch:
-    inputs:
-      run_news:
-        description: "Run news ingestion job"
-        required: false
-        default: "true"
-      run_brief_global:
-        description: "Run global daily brief job"
-        required: false
-        default: "false"
-  schedule:
-    # Rolling news ingestion: every 30 minutes
-    - cron: "*/30 * * * *"
-    # Daily global brief: 11:00 UTC (adjust as needed)
-    - cron: "0 11 * * *"
+# on:
+#   workflow_dispatch:
+#     inputs:
+#       run_news:
+#         description: "Run news ingestion job"
+#         required: false
+#         default: "true"
+#       run_brief_global:
+#         description: "Run global daily brief job"
+#         required: false
+#         default: "false"
+#   schedule:
+#     # Rolling news ingestion: every 30 minutes
+#     - cron: "*/30 * * * *"
+#     # Daily global brief: 11:00 UTC (adjust as needed)
+#     - cron: "0 11 * * *"
 
-jobs:
-  call-backend:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate secrets
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -z "${BACKEND_BASE_URL:-}" ]; then
-            echo "Missing BACKEND_BASE_URL secret" >&2
-            exit 1
-          fi
-          if [ -z "${ADMIN_API_KEY:-}" ]; then
-            echo "Missing ADMIN_API_KEY secret" >&2
-            exit 1
-          fi
-        env:
-          BACKEND_BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
-          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+# jobs:
+#   call-backend:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Validate secrets
+#         shell: bash
+#         run: |
+#           set -euo pipefail
+#           if [ -z "${BACKEND_BASE_URL:-}" ]; then
+#             echo "Missing BACKEND_BASE_URL secret" >&2
+#             exit 1
+#           fi
+#           if [ -z "${ADMIN_API_KEY:-}" ]; then
+#             echo "Missing ADMIN_API_KEY secret" >&2
+#             exit 1
+#           fi
+#         env:
+#           BACKEND_BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+#           ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
 
-      - name: Run jobs
-        shell: bash
-        run: |
-          set -euo pipefail
-          base="${BACKEND_BASE_URL%/}"
+#       - name: Run jobs
+#         shell: bash
+#         run: |
+#           set -euo pipefail
+#           base="${BACKEND_BASE_URL%/}"
 
-          echo "Event: ${{ github.event_name }}"
+#           echo "Event: ${{ github.event_name }}"
 
-          # Determine which schedule fired (if schedule)
-          cron="${{ github.event.schedule || '' }}"
+#           # Determine which schedule fired (if schedule)
+#           cron="${{ github.event.schedule || '' }}"
 
-          run_news="false"
-          run_brief_global="false"
+#           run_news="false"
+#           run_brief_global="false"
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            run_news="${{ inputs.run_news }}"
-            run_brief_global="${{ inputs.run_brief_global }}"
-          else
-            # schedule
-            if [ "$cron" = "*/30 * * * *" ]; then
-              run_news="true"
-            fi
-            if [ "$cron" = "0 11 * * *" ]; then
-              run_brief_global="true"
-            fi
-          fi
+#           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+#             run_news="${{ inputs.run_news }}"
+#             run_brief_global="${{ inputs.run_brief_global }}"
+#           else
+#             # schedule
+#             if [ "$cron" = "*/30 * * * *" ]; then
+#               run_news="true"
+#             fi
+#             if [ "$cron" = "0 11 * * *" ]; then
+#               run_brief_global="true"
+#             fi
+#           fi
 
-          if [ "$run_news" = "true" ]; then
-            echo "Calling $base/jobs/news/run"
-            curl -fSsS --retry 3 --retry-delay 5 \
-              -X POST "$base/jobs/news/run" \
-              -H "x-admin-key: $ADMIN_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d '{}'
-            echo ""
-          fi
+#           if [ "$run_news" = "true" ]; then
+#             echo "Calling $base/jobs/news/run"
+#             curl -fSsS --retry 3 --retry-delay 5 \
+#               -X POST "$base/jobs/news/run" \
+#               -H "x-admin-key: $ADMIN_API_KEY" \
+#               -H "Content-Type: application/json" \
+#               -d '{}'
+#             echo ""
+#           fi
 
-          if [ "$run_brief_global" = "true" ]; then
-            echo "Calling $base/jobs/brief/run_global"
-            curl -fSsS --retry 3 --retry-delay 5 \
-              -X POST "$base/jobs/brief/run_global" \
-              -H "x-admin-key: $ADMIN_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d '{}'
-            echo ""
-          fi
-        env:
-          BACKEND_BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
-          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+#           if [ "$run_brief_global" = "true" ]; then
+#             echo "Calling $base/jobs/brief/run_global"
+#             curl -fSsS --retry 3 --retry-delay 5 \
+#               -X POST "$base/jobs/brief/run_global" \
+#               -H "x-admin-key: $ADMIN_API_KEY" \
+#               -H "Content-Type: application/json" \
+#               -d '{}'
+#             echo ""
+#           fi
+#         env:
+#           BACKEND_BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+#           ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
